@@ -1,0 +1,446 @@
+---
+title: "SCOPE Model Case Study"
+subtitle: "An analysis of past, present, and potential future models."
+author: "Stefanie Molin"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+params:
+  kpi_data_file: "data/kpi_data.Rdata"
+  sample_data_file: "data/sample_data.Rdata"
+  sample_roc_curve_data: "data/sample_roc_curve_data.Rdata"
+  eda_data: "data/EDA.Rdata"
+  mean_percent_change_data_file: "data/mean_percent_change_data.Rdata"
+  mean_percent_change_AS_results_file: "data/mean_percent_change_AS_results.Rdata"
+  mean_percent_change_TS_results_file: "data/mean_percent_change_TS_results.Rdata"
+  mean_percent_change_RexT_results_file: "data/mean_percent_change_RexT_results.Rdata"
+  median_percent_change_data_file: "data/median_percent_change_data.Rdata"
+  median_percent_change_AS_results_file: "data/median_percent_change_AS_results.Rdata"
+  median_percent_change_TS_results_file: "data/median_percent_change_TS_results.Rdata"
+  median_percent_change_RexT_results_file: "data/median_percent_change_RexT_results.Rdata"
+  TS_histogram_data_file: "data/data_for_TS_histogram.Rdata"
+  twitter_results_file: "data/twitter_results.Rdata"
+  chi_square_AS_results_file: "data/chi_square_AS_results.Rdata"
+  chi_square_TS_results_file: "data/chi_square_TS_results.Rdata"
+  chi_square_Exec_results_file: "data/chi_square_Exec_results.Rdata"
+  western_electric_results_file: "data/western_electric_results.Rdata"
+  python_AS_file: "data/python_AS.csv"
+  python_TS_file: "data/python_TS.csv"
+  python_RexT_file: "data/python_RexT.csv"
+  python_logs_file: "data/metis_logs.csv"
+header-includes:
+   - \usepackage{caption}
+   - \usepackage{float}
+output:
+  pdf_document:
+    toc: yes
+    toc_depth: '3'
+  html_document:
+    toc: yes
+    toc_depth: 3
+---
+
+```{r main-setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, 
+                      fig.align = "center", fig.pos="H", 
+                      fig.height = 2.8, fig.width = 5, 
+                      tidy = TRUE, tidy.opts = list(width.cutoff=80), 
+                      root.dir = 'C:/Users/S.Molin/scope_model_case_study')
+
+# get today's date
+todays_date <- format(Sys.Date(), '%B %d, %Y')
+
+# load the case study library and other utilities
+library(modelAnalyzeR)
+library(dplyr)
+library(knitr)
+library(scopeR)
+library(stringi)
+library(stringr)
+library(ggplot2)
+library(cowplot)
+library(pander)
+library(corrplot)
+
+# table options
+panderOptions('digits', 10)
+panderOptions('round', 2)
+panderOptions('big.mark', ',')
+panderOptions('keep.trailing.zeros', TRUE)
+panderOptions('table.style', 'simple')
+panderOptions('table.emphasize.rownames', FALSE)
+panderOptions('table.split.table', 100)
+panderOptions('table.continues', '')
+panderOptions('table.continues.affix', '')
+panderOptions('table.alignment.default', 'left')
+```
+
+\pagebreak
+
+# Introduction
+`SCOPE` is a suite of anomaly detection tools for performance- and technical-based metrics. Our principal offering is daily alerts sent to the employees running the affected account(s) for further investigation. `SCOPE` has been using rules-based approaches for anomaly detection since its inception, but I want to change that---I want to make `SCOPE` smarter.
+
+How can we know if a new approach is indeed better than the current? We need to establish a set of criteria for comparing models and a baseline for evaluating the performance of various candidate models. In order to accomplish this, we need to understand how models---past, present, and potential future---work, perform, and compare. This case study will document the models, how they work, and their performance on the same data sets.  I will also be looking for any strengths, weaknesses, or patterns that I notice with each model's output. Ultimately, I will evaluate them against a set of criteria---and each other---to determine the next model for `SCOPE`.  
+
+# The Data
+We can't do an analysis without data, so we are going to use the data we have been collecting with `SCOPE` to perform this case study. In order to get an accurate look at how the models perform, we are going to use data from several days for this analysis: some from the beginning of the month, some from the middle, and some from the end. Additional dates have been pulled for the territory RexT data, since it is comparatively sparse. Each series must have at least 25 days of data in the last 30 days and TAC greater than 0 for the last 2 days (for clients); this leaves us with 25-60 days per series (30 for territory RexT series).
+
+## Collection of Labelled Data: `Metis`
+The `SCOPE` team and I added feedback buttons to the `SCOPE` emails; these only give us feedback on what the model flagged as positive (series flagged as negatives are never sent in the emails). However, in order to accurately measure our models, we need user input on what we flag as negative since we can be wrong. To make this possible, I built a web app called `Metis` (Figure \ref{fig:metis_screenshot}) which shows users time series (KPI evolutions) and gives them the option to classify the last point in the series as non-anomalous (dare I say normal?) or something worthy of further inspection/notification (an alert). 
+
+\begin{figure}[h!]
+\centering
+  \includegraphics[width=0.37\textwidth]{images/Metis_example.png}
+\caption{Collection of labelled data through Metis}
+\label{fig:metis_screenshot}
+\end{figure}
+
+This data allows us to compare how users classified time series to how the models classifed them; we can see when they: agreed it was an alert (true positive); agreed it was not an alert (true negative); disagreed because the users said it was an alert but the model didn't (false negative), or because the model flagged it but the users didn't (false positive). More on this later in the [Evaluation Criteria](#evaluation_criteria) section. Although the feedback from the buttons in the emails is collected with `Metis`, only data points collected through use of the app itself will be used for this case study; this is because the dates collected via the feedback buttons don't overlap with the dates used for this study and the email responses are from users with additional information---we don't want to introduce an information bias here.
+
+I had users from various teams (AS, AX, and TS) provide data for this case study using `Metis`; a user's team determines which KPIs they can classify. Users who receive `SCOPE` alerts for certain metrics would be the ones classifying those, since we are trying to collect user opinions; for example, TS are the only group that can classify site events, but they can't classify spend which is done by AS. `Metis` has all the same data we are using for the case study, but, since it wouldn't be possible to have all users classify everything quickly, `Metis` first randomly (to avoid potentially introducing a selection bias) shows all series that have *never* been classified. This way everything will get classified once before others get a second classification. Note that this is by user group: user groups with less KPIs to classify will finish sooner and start giving second and third classifications before another group finishes its first round. The only restriction we put on this process is that a user can only classify a series once; we want multiple opinions on each time series, so we can average the responses, just not from the same user. This also means that, since we don't have everything classified, the count of alerts triggered by each metric will be higher than the count of alerts flagged by the model and also in `Metis`; we will only be able to test the model against real world opinion for a subset of all the KPI evolutions---a random sample of them.
+
+This is going to be a very subjective task by nature (even though we show them instructions of how to respond correctly) because everyone sees things differently, and they all have different ways of managing an account; in fact, as I was conducting user sessions, I noticed how each user approached the task differently: some were trying to gauge how much the series changed in the last day, some looked for seasonality that could explain the change, others looked for deviation from a central tendency, a few even flagged metrics that had flat-lined for the full 60 day range shown in the graph saying that something probably wasn't set up properly, and therefore, they would want to know. 
+
+After these initial 1-1 user sessions, when `Metis` was ready for multiple users, I conducted user groups where we spent the first half using `Metis` and the second half discussing what they were looking for when they classified series. Here, I will provide the results by group:
+
++ AS
+    + Dates 
+        + day of week is useful in classifying; vertical not so much
+        + look at quarter to date (for goaling), last 30 days, last 2 weeks, last week, and yesterday so these date ranges are important
+        + time of month; last 2 weeks and day before are common viewpoints
+        + if it is going crazy, then check back the full date range
+    + Patterns
+        + volatility throughout (steady in last week = no alert)
+        + huge relative change/departure from pattern 
+        + fluctuations outside the pattern
+    + Values
+        + magnitude of change over days past
+        + straight lines at 0 are irrelevant because they would know before then
++ AX
+    + Dates
+        + 7-14 days is best (60 days is often noise); show only 2 weeks or 30 day max
+        + number of points is more important than the dates themselves
+        + with long date range: patterns that were abnormal and persistent for a minimum of a few days
+        + look at duration of anomaly
+        + past 3 days to see if alert was redundant, full timeline to see if within long-term normal range.
+        + good to confirm drops/spikes even if they are expected end of month (not too worried about seasonality)
+    + Patterns
+        + increasing or decreasing outside what has been normal in the past
+        + record low/high and patterns (check if fluctuates a lot)
+        + when to disqualify an alert for noise
+    + Values
+        + if there was an increase/decrease that was strong and outside of the boundary (+/- a few percentage points) of the last few days week of data
+        + if the data came to zero
+        + magnitude of the drop, not just percentage (15 to 5 isn't as worrisome as 150K to 50K)
+        + if yesterday's value is negative even if the change isn't large or in a range it should never be (yesterday is in wrong spot – i.e. margin shouldn't be negative ever)
+        + looked at closest days to last point and check if it is an anomaly compared to recent data points
++ TS
+    + Dates
+        + length of time at a certain range and then a change
+        + weekends/seasonality; end, middle, beginning of month
+    + Patterns
+        + pattern across whole time span and seasonality/volatility
+        + change in variation between the steps
+        + in-line changes that are large in magnitude but might be normal
+        + slow decline for events in general – no alert; this should be brought to TS attention by the AS
+        + InApp tags pattern will be a slow decline if there was a bad release as more and more people update the app
+    + Values
+        + large percentage drops on small magnitudes is not too important (i.e. from 15 to 5 is not but 100k to 50k is)
+        + lowest or highest ever seen and still increasing/decreasing in same direction
+        + last point higher or lower than avg and max/min
+        + magnitude of change
+        + triggered more alerts on decrease (increase needs to be more egregious)
+
+Each group definitely has their intricacies, but they are all looking for departures from patterns and paying attention to the magnitude of the changes---not just the percentage. 
+
+## Dates Used for Analysis
+Since `SCOPE` is being pulled to look at *yesterday's* data, the run dates (the day `SCOPE` runs, i.e. "today") below will be 1 day after the date the models will look for alerts on. Therefore, a date of November 1st is actually end of the month. Table \ref{tabs:main_dates_of_study} contains the dates for this analysis. *Entries marked with `*` are RexT only.*
+
+```{r main_dates_of_study, echo = FALSE}
+pander(data.frame("Beginning of Month" = c('2017-11-02', '2017-11-03*', '2017-11-06*', '2017-11-07*', '2017-11-08*', '2017-11-09*'), 
+                 "Middle of Month" = c('2017-10-20', '2017-11-13*', '2017-11-14*', '2017-11-15*', '2017-11-16*', '2017-11-17*'), 
+                 "End of Month" = c('2017-10-25*', '2017-10-26*', '2017-10-27*', '2017-10-30*', '2017-10-31*', '2017-11-01'), check.names = FALSE),
+      caption = "\\label{tabs:main_dates_of_study}Dates for analysis")
+
+# save dates here
+AS_TS_beginning_date <- '2017-11-02'
+AS_TS_middle_date <- '2017-10-20'
+AS_TS_end_date <- '2017-11-01'
+
+exec_beginning_dates <- c('2017-11-02', '2017-11-03', '2017-11-06', '2017-11-07', '2017-11-08', '2017-11-09')
+exec_middle_dates <- c('2017-10-20', '2017-11-13', '2017-11-14', '2017-11-15', '2017-11-16', '2017-11-17')
+exec_end_dates <- c('2017-10-25', '2017-10-26', '2017-10-27', '2017-10-30', '2017-10-31', '2017-11-01')
+```
+
+```{r main-data, eval=FALSE, echo=FALSE}
+# pull all KPI evolution and logs data from Metis
+AS_data <- query_metis("SELECT * FROM alerts.kpi_evolutions 
+                       WHERE client_name != 'N/A'") %>% 
+  select(-partner_id, -partner_name, -site_type, -event_name) %>% 
+  mutate(day_of_week = format(day, "%w"), day_of_month = format(day, "%d"), 
+         month_of_year = format(day, "%m"), day_of_year = format(day, "%j"), 
+         week_of_year = format(day, "%U")) %>% 
+  mutate_at(-matches("(^day$)|(run_date)|(value)", vars = colnames(.)), factor)
+
+TS_data <- query_metis("SELECT * FROM alerts.kpi_evolutions 
+                       WHERE client_name = 'N/A' AND global_account_name != 'N/A'") %>% 
+  select(-client_name, -client_id, -campaign_id, -campaign_name, -campaign_scenario,
+         -campaign_type_name, -campaign_revenue_type, -campaign_funnel_id) %>%
+  mutate(day_of_week = format(day, "%w"), day_of_month = format(day, "%d"), 
+         month_of_year = format(day, "%m"), day_of_year = format(day, "%j"), 
+         week_of_year = format(day, "%U")) %>% 
+  mutate_at(-matches("(^day$)|(run_date)|(value)", vars = colnames(.)), factor)
+
+RexT_data <- query_metis("SELECT * FROM alerts.kpi_evolutions 
+                         WHERE kpi = 'territory_rext'") %>% 
+  select(country, subregion, region, ranking, day, run_date, kpi, value)  %>% 
+  mutate(day_of_week = format(day, "%w"), day_of_month = format(day, "%d"), 
+         month_of_year = format(day, "%m"), day_of_year = format(day, "%j"), 
+         week_of_year = format(day, "%U")) %>% 
+  mutate_at(-matches("(^day$)|(run_date)|(value)", vars = colnames(.)), factor)
+
+logs <- query_metis("SELECT * FROM alerts.classification_logs WHERE source = 'web_app'")
+```
+
+
+```{r main-save-data-locally, echo=FALSE, eval=FALSE}
+# save the KPI evolution data locally
+save(AS_data, TS_data, RexT_data, logs, file = params$kpi_data_file)
+```
+
+
+```{r main-load-dataframes, echo=FALSE}
+# pull all data into R (run but not displayed)
+load(params$kpi_data_file)
+```
+
+\pagebreak
+
+## Structure and Content
+```{r get_kpi_list, echo = FALSE}
+kpis <- logs %>% distinct(kpi) %>% unlist()
+
+kpis <- kpis %>% str_replace_all("_", " ") %>% str_replace_all("rext", "RexT") %>% str_replace_all("client RexT", "RexT local") %>%  str_replace_all("RexT euro", "RexT Euro")
+
+kpis <- ifelse(kpis %in% c("cr", "cos", "ctr", "tac"), toupper(kpis), kpis)
+
+kpis <- kpis[order(kpis)]
+
+kpis[length(kpis)]<- paste("and", kpis[length(kpis)])
+```
+I am capturing data across several dimensions for AS, TS, and RexT-based alerts on `r kpis %>% paste(collapse = ", ")`. Below you will find an example of how each data set looks, including the log data we are collecting from `Metis`. I am pulling in more dimensions than we currently use in order to evaluate their potential utility in designing a new model. If they prove to have no added value when performing this case study, they will be removed from `SCOPE`'s data collection.  
+
+*Note that `run_date` is the date the alerts would have been run while `day` is the day the data is for.*
+
+```{r main-select-sample-data, echo = FALSE, eval=FALSE}
+# sample AS data
+sample_as_data <- AS_data %>% 
+  filter(run_date == '2017-11-01' & client_name == 'SEARS US' & day == '2017-10-31' & value > 100) %>% 
+  select(-series)
+
+# sample TS data
+sample_ts_data <- TS_data %>% 
+  filter(run_date == '2017-11-02' & partner_name == 'SEARSUS' & day == '2017-11-01' & global_account_name == 'SEARS') %>% 
+  select(-series)
+
+# sample RexT data
+sample_rext_data <- query_metis("SELECT * FROM alerts.kpi_evolutions WHERE kpi = 'territory_rext' AND day = '2017-10-20'") %>% 
+  select(country, subregion, region, ranking, day, run_date, kpi, value)
+
+# save
+save(sample_as_data, sample_ts_data, sample_rext_data, file = params$sample_data_file)
+```
+
+
+```{r main-load-sample-data, echo=FALSE}
+# pull all data into R (run but not displayed)
+load(params$sample_data_file)
+```
+
+#### Preview of AS data
+For the AS data (Table \ref{tabs:main_data_preview_AS}), I am pulling campaign- and client-level stats by day including dimensions related to campaign setup like bidding strategy, campaign type, campaign funnel, geo, and vertical. 
+
+```{r main_data_preview_AS, echo = FALSE}
+pander(head(sample_as_data[,c(17, 1:5, 8, 6, 7, 9, 10:16, 18:20)], 5), caption = "\\label{tabs:main_data_preview_AS}Snapshot of AS data", split.table = 90,
+       justify = c(rep("left", 19), "right"))
+```
+
+\pagebreak
+
+#### Preview of TS data
+For the TS data, I am pulling tag- and site-level stats by day. I capture both `site_type` and `event_name` as well as geo and vertical data (Table \ref{tabs:main_data_preview_TS}).
+```{r main_data_preview_TS, echo = FALSE}
+pander(head(sample_ts_data[,1:16], 5), caption = "\\label{tabs:main_data_preview_TS}Snapshot of TS data", split.table = 85,
+       justify = c(rep("left", 15), "right"))
+```
+
+#### Preview of RexT data
+Here, I am only collecting territory RexT data by day where the territory gets as granular as `country` (i.e. US) and as broad as `region` (i.e. Americas). Some sample rows are provided in Table \ref{tabs:main_data_preview_RexT}.
+```{r main_data_preview_RexT, echo = FALSE}
+pander(head(sample_rext_data, 4), caption = "\\label{tabs:main_data_preview_RexT}Snapshot of RexT data", split.table = 80, 
+       justify = c(rep("left", ncol(sample_rext_data) - 1), "right"))
+```
+
+\pagebreak
+
+#### Preview of Log data
+This data set is different than the rest. We aren't recording time series here, but rather, logging all classifications that are collected with `Metis` (Table \ref{tabs:main_data_preview_logs}). Here, I will only be focusing on input that came from the web app (not looking at the email feedback buttons, since our data is pre-feedback buttons). 
+```{r main_data_preview_logs, echo = FALSE}
+pander(head(logs[,c(1:3, 5:16, 4, 17)], 5) %>% 
+         dplyr::mutate(client_id = as.character(client_id), partner_id = as.character(partner_id), campaign_id = as.character(campaign_id)), 
+       caption = "\\label{tabs:main_data_preview_logs}Snapshot of logs", split.table = 110)
+```
+
+*Note that most of these entries will have $is\_alert = FALSE$. This is expected because anomalies shouldn't be expected to happen most of the time.*
+
+## Data Prep
+The aforementioned data snapshots are raw data. We need to prep and clean it before we can use it in the models. To do so, we have a 3-step process. 
+
+1. Disqualify any series with less than 25 rows of data or traffic aquisition costs of 0 for 2 consecutive days. *(may not be used for all models)*
+2. Replace all non-graphable values (`NaN`, `Inf`, `x/0`, etc.) with 0.
+3. Fill in any dates missing between the minimum date of the series and the maximum date of all series with the same run date with either:
+
+     a. the median values of each metric, if the data is missing across all series (meaning it isn't in the database due to some unknown error)
+     b. 0, if the date isn't missing globally (meaning the client had no data recorded for that day).
+
+*Note that this process might not be the most optimal, but I will use this as the initial cleaning for all models I test, unless otherwise written, to be consistent.*
+
+\pagebreak
+
+# Evaluation Criteria {#evaluation_criteria}
+The goal of this case study is to find the model that best identifies anomalies as a human would. However, we are only able to "predict" if something is an anomaly and that can be different to what it is in the real world, as illustrated in Figure \ref{fig:prediction_vs_real_world}. We will also need to decide if reducing false positives or false negatives is more important to us, as we may be faced with variations of the same model that reduce one or the other.
+
+\begin{figure}[h!]
+\centering
+  \includegraphics[width=0.45\textwidth]{images/prediction_vs_real_world.png}
+\caption{Prediction vs. Real World \\ \textit{Note the above abbreviations will be used throughout this paper}}
+\label{fig:prediction_vs_real_world}
+\end{figure}
+
+In an effort to improve our performance in this task, each model will be evaluated as follows:
+
+1. Number of alerts triggered for date in question and by metric.
+2. Combinations of alerts triggered (i.e. how are alerts distributed over clients?).
+3. Comparison to data collected and classified with `Metis`. In cases where the model is looking at the series holistically, if any of the metrics are alerts, the series should be counted as such. We will be using the following metrics to evaluate how well each model matches up with user opinion:
+
+    * **Precision** is the probability that a (randomly selected) retrieved document is relevant. It can also be thought of as the average probability of relevant retrieval.[^1] Note that this is the only metric we were able to calculate without the data from `Metis` since we would only be looking at what the models flagged as alerts, however, it is much easier to collect the data through `Metis`.
+    \begin{equation}
+    \centering
+      Precision = \frac{TP}{TP + FP}
+    \label{eq:precision}
+    \end{equation}
+    
+    * **Recall** is the probability that a (randomly selected) relevant document is retrieved in a search (also called `sensitivity` or true positive rate).  Alternatively, it is the average probability of complete retrieval, meaning it measures the proportion of positives that are correctly identified as such.[^1]^,^[^2] Note that without the data from `Metis`, we were unable to calculate this metric because we had no insight into what the models marked as not an alert.
+    \begin{equation}
+    \centering
+      Recall = \frac{TP}{TP + FN}
+    \label{eq:recall}
+    \end{equation}
+    
+    * **F1-score** (also F-score or F-measure) is a measure of a test's accuracy in statistical analysis of binary classification. It considers both the `precision` and the `recall` and is the harmonic average of the `precision` and `recall`, where an `F1-score` reaches its best value at 1 (perfect `precision` and `recall`) and worst at 0.[^3] We will treat this as our main metric.
+    \begin{equation}
+    \centering
+      F1\_score = 2 * \frac{precision * recall}{precision + recall}
+    \label{eq:F1_score}
+    \end{equation}
+    
+    \pagebreak
+    
+    * **Specificity** (also called the true negative rate) measures the proportion of negatives that are correctly identified as such (e.g. the percentage of healthy people who are correctly identified as not having the condition).[^2] Since the task of anomaly detection should result in very few anomalies, we should expect to have high `specificity` for everything because most series will be true negatives.
+    \begin{equation}
+    \centering
+      Specificity = \frac{TN}{TN + FP}
+    \label{eq:specificity}
+    \end{equation}
+    
+    * **Accuracy** is a combination of both types of observational error (random and systematic), so high accuracy requires both high `precision` and high trueness.[^4]
+    \begin{equation}
+    \centering
+      Accuracy = \frac{TP + TN}{TP + FP + TN + FN}
+    \label{eq:accuracy}
+    \end{equation}
+
+    
+    * **ROC Curve** (receiver operating characteristic curve), is a graphical plot that illustrates the diagnostic ability of a binary classifier system as its discrimination threshold is varied. The ROC curve is created by plotting the true positive rate (TPR) against the false positive rate (FPR) at various threshold settings (see Figure \ref{fig:sample_roc_curve}).[^5] Therefore, when our model doesn't yield us with a probability of alert, we won't have a threshold to vary; in these cases, we will simply plot the specific observations (time of month and by metric) to see how they perform compared to randomly triggering alerts (45-degree line). We strive to maximize the area under the ROC Curve (AUC), meaning that the best model will be the one with a ROC curve that gets closest to the top left corner (100% TPR, 0% FPR).
+    
+4. **Algorithm Complexity**.  Big-O notation is used to classify algorithms according to how their running time or space requirements grow as the input size grows.[^6] I will use this to give an idea of how efficient each of the models is. This is important because if a model takes a long time to run or calculate but is only a marginal improvement over another, it may not be the choice for scalability reasons. Where possible, I will include average-case ($\Theta$) and best-case ($\Omega$). Note that this measures the number of operations a algorithm requires, however, different implementations (i.e. a vectorized method vs. a `for`-loop) of the same algorithm may run at different speeds.
+
+[^1]: [Precision and recall](https://en.wikipedia.org/wiki/Precision_and_recall)
+[^2]: [Sensitivity and specificity](https://en.wikipedia.org/wiki/Sensitivity_and_specificity)
+[^3]: [F1 Score](https://en.wikipedia.org/wiki/F1_score)
+[^4]: [Accuracy and precision](https://en.wikipedia.org/wiki/Accuracy_and_precision)
+[^5]: [Receiver operating characteristic](https://en.wikipedia.org/wiki/Receiver_operating_characteristic)
+[^6]: [Big O notation](https://en.wikipedia.org/wiki/Big_O_notation)
+
+    
+```{r sample_roc_curve, fig.cap="\\label{fig:sample_roc_curve}Comparing ROC curves", echo = FALSE}
+load(params$sample_roc_curve_data)
+library(RColorBrewer)
+# see what color sets are available (scale_color_manual) -- 3 groups (top to bottom) = sequential, qualitative, divergent
+# display.brewer.all()
+
+sample_roc_curve_data %>% ggplot2::ggplot(aes(x = FPR, y = TPR, col = series)) +
+  ggplot2::geom_line(size = 0.8) +
+  ggplot2::coord_cartesian(xlim = c(0, 1), ylim = c(0, 1), expand = FALSE) +
+  ggplot2::geom_abline(slope = 1, intercept = 0, color = 'gray', linetype = 'dashed') +
+  ggplot2::scale_x_continuous(labels = scales::percent) +
+  ggplot2::scale_y_continuous(labels = scales::percent) +
+  ggplot2::labs(x = 'False Positive Rate', y = 'True Positive Rate', col = '',
+                title = "Sample ROC Curves", subtitle = "",
+                caption = '*Note: Dashed line represents ROC curve of randomly triggering anomalies.') +
+  case_study_theme() +
+  scale_color_manual(values = brewer.pal(4, "YlGn")[2:4])
+```
+
+\pagebreak
+
+```{r exploratory-data-analysis, child = 'EDA.Rmd'}
+```
+
+\pagebreak
+
+# Models
+Now, we will take a look at the models `SCOPE` has used in the past along with variations on them, the current model, and potential future models. This section will serve as documentation of `SCOPE`'s model history and provide us with the analysis we need to select the next new model. Along the way, we can hope to become more attuned to the idiosyncrasies of the data.
+
+Since models often build on learnings from former ones, I will note any interesting comparisons between the models, in the model that was analyzed last. Here, we will go chronologically through the models starting with the original one; the potential new models don't have a specific order. You will notice how the models become more sophisticated compared to their predecessors, however, we have yet to have any machine learning algorithm due to the lack of labelled data prior to the creation of `Metis` and infrastructure to handle the additional computational load. The future proposed models will all have some element of machine learning now that we have access to a wealth of labelled data letting us know what is an alert and what isn't. 
+
+Ideally, there would be a way to tell how likely something is to be an alert, this way we could perhaps only send emails of the most likely alerts, but reserve the mid-range likelihood alerts for another medium, like a portal or dashboard. This would reduce the risk of desensitizing the audience to the emails with too many false positives, while having the audience trust that `SCOPE` is going to find things big or small. Of course, this introduces another optimization problem of finding what probability of alert makes the email and what doesn't, but that is more a matter of preference.
+
+It is important to note that we aren't merely trying to build an anomaly detection system; we need to build a system that detects anomalies, but can also detect things before they are obvious anomalies. It became very clear to me during the user sessions I held with `Metis` to collect the labelled data for this case study that "alerts" aren't just drops or spikes; users want to be informed as to what is happening on their accounts, be it continuously trending downward/upward, flat-lining of certain metrics without recovery, sudden erratic behavior, drops after spikes and vice versa which may seem like returning to normalcy, etc. We need an alerting system that is robust enough to handle the "obvious" anomalies, but also alert us when the series starts to exhibit concerning behavior or when a series of metrics is concerning as a whole but not manifesting itself as a large change on each metric. For simplicity, I will refer to all these "alerts" as anomalies whether they are obvious or indications of possible future issues. 
+
+*Note that some models will disqualify certain time series (not enough days, no TAC last 2 days, etc.), however, it is still possible to classify those in `Metis`; therefore, for the purposes of evaluating the models and penalizing them for having limitations that a human would not, those will be placed as "no alert" for the model and compared to user opinions. If the user also classified as "no alert", the model correctly disqualified the account (by ignoring it, it can't trigger an alert). Conversely, if the user classified it as an alert, then the model will be penalized with a false negative because it wrongly disqualified the account. The idea is to have a model that doesn't have many (if any) of these restrictions and can match up well with user opinions.*
+
+## Prior Models
+`SCOPE` has had 2 models prior to the model in production at the time of writing this paper (`r todays_date`): percent change from the average of prior days and Twitter's `AnomalyDetection` R package. Here, we will analyze those along with relevant variations. Note that for all these models we have to exclude some of the time series to make sure we have enough data for the tests. Users may still have flagged these as alerts, so will we flag them as not alerts to count everything, thereby penalizing these models for not being able to detect those types of alerts. AS and TS series need to have data for the day before the run date (the day to test) and have data for 25 of the last 30 days; additionally, for the AS data, we need to have TAC greater than 0 for the last 2 days.
+
+```{r prior-model-1, child = 'Percent Change From Average.Rmd'}
+```
+
+```{r twist-on-prior-model-1, child = 'Percent Change From Median.Rmd'}
+```
+
+```{r twitter-model, child = "Twitter_AnomalyDetection_Package.Rmd"}
+```
+
+## Current Model and Other Rules-based Models
+Now that we understand the motivation to reduce sensitivity, we are going to dive into the current model being used from May 16, 2017 - `r todays_date` along with any other rules-based models that are found while researching this paper. Although the purpose of this case study is to look through models we have used and then find a machine learning alternative, I wanted to have a section for other rules-based models that we have not used, yet could be interesting for this study and to help establish the baseline performance we are looking to beat with the machine learning alternatives. 
+
+```{r current-model, child = 'Chi-Square Tukey Fence More Extreme.Rmd'}
+```
+
+```{r western-electric, child = 'Western Electric Rules.Rmd'}
+```
+
+## Unsupervised Machine Learning Models
+Unsupervised models are useful when we don't have any information on whether our model output is correct (i.e. we don't have labelled data); in this case, we would not know what was an alert and what wasn't---we just have the time series data. The models presented here won't use the labelled data to inform their predictions, however, since we have that data, we can use it to evaluate them for comparision to the supervised learning models presented in the next section. We can expect supervised machine learning models to perform better than unsupervised ones, nonetheless, to be thorough, I will go through some potential unsupervised algorithms for comparison. Here, we have to make sure our training data is both representative of the data set as a whole and separate from the test set (unseen by the model during training) used to grade the models on. 
+
+### TBD
+
+## Supervised Machine Learning Models
+Since we have the labelled data from `Metis`, we can use supervised machine learning models. With supervised learning, the model can use labelled data to make better judgements; we are no longer guessing as we were with the unsupervised methods discussed previously. These models should perform better than their unsupervised counterparts due to the additional information. As with unsupervised learning, we need our test and train data sets to avoid overfitting of the model which leads to poor ability of the model to generalize to new (unseen) cases.
+
+```{r logistic-regression, child = 'Logistic Regression.Rmd'}
+```
+
+### TBD
+
+# Conclusion
+**TBD** Final thoughts/overall learnings/which new model selected and why 

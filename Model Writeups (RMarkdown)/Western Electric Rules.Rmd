@@ -1,0 +1,479 @@
+---
+title: "Western Electric Rules"
+author: "Stefanie Molin"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r western-electric-setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# load the case study library
+library(modelAnalyzeR)
+library(dplyr)
+library(tidyr)
+
+# all data will be loaded in the parent document and referenced within each of the child sections
+
+# sample data sets for control chart samples
+beyond_control_limits <- data.frame(index = 1:15, value = c(1, 10, 2, 9, 3, 8, 4, 7, 5, 6, 2, 8, 6, 4, 35))
+break_rule_2 <- data.frame(index = 1:15, value = c(1, 10, 2, 9, 3, 8, 4, 7, 5, 6, 2, 8, 36, 4, 35))
+break_rule_3 <- data.frame(index = 1:15, value = c(1, 1, 2, 1, 3, 8, 4, 1, 5, 6, 20, 8, 16, 14, 15))
+break_rule_4 <- data.frame(index = 1:15, value = c(-11, -11, 2, 1, 3, 2, 40, 11, 15, 16, 20, 18, 16, 14, 15))
+break_stratification_rule <- data.frame(index = 1:16, value = c(4, 2, 3, 2, 3, 2, 2, 3, 3, 3, 2, 2, 2, 2, 3, 3))
+break_mixture_rule <- data.frame(index = 1:15, value = c(6, 4, 5, 6, 3, 5, 4, 9, 9, 9, 2, 9, 1, 10, 1))
+break_trend_rule <- data.frame(index = 1:15, value = c(6, 4, 5, 6, 3, 5, 4, 9, 9, 8, 7, 5, 4, 3, 1))
+break_noise_rule <- data.frame(index = 1:15, value = c(1, 10, 2, 9, 3, 8, 4, 7, 5, 6, 2, 8, -36, -34, -35))
+no_issues <- data.frame(index = 1:15, value = c(1, 10, 2, 9, 3, 8, 4, 7, 5, 6, 2, 8, 6, 4, 5))
+```
+
+### Western Electric Rules
+Statistical Process Control is a practice often used in manufacturing as quality control "alerting" for products. Figure \ref{fig:custom_standard_normal} shows the normal distribution which many natural processes follow; we can observe where the mean and standard deviations from the mean fall, as well as the percentage of observations that fall in those areas. This motivates the use of these ranges to flag "abnormal" behavior. Control charts (see Figure \ref{fig:sample_western_electric_rules}) are constructed, and the outputs are graphed along with the mean for the sample and some boundaries: most commonly the upper control limit (UCL) and the lower control limit (LCL). Rules, such as distance in standard deviations from the mean and patterns, are then used to determine if the process has gone out-of-control.[^10] 
+
+```{r custom_standard_normal, fig.height = 2.6, fig.cap = "\\label{fig:custom_standard_normal}Normal curve showing standard deviations from the mean", echo = FALSE}
+standard_normal_plot()
+```
+
+In 1956, Western Electric published some of the rules it used for quality control which take into account patterns and use the mean and standard deviation to catch out-of-control or non-random occurrences.[^11] I will use their rules along with a few additional from the *Nelson rules*[^12] which build upon these, giving us 8 rules.
+
+[^10]: [Statistical process control](https://en.wikipedia.org/wiki/Statistical_process_control)
+[^11]: [Western Electric rules](https://en.wikipedia.org/wiki/Western_Electric_rules)
+[^12]: [Nelson rules](https://en.wikipedia.org/wiki/Nelson_rules)
+
+These rules will be ordered from most serious to least serious for our purposes, and the algorithm will flag the most flagrant and move onto the next series (it won't flag the same series for multiple violations). From there, I will look into the performance of all the rules and different combinations of the rules to determine which rules work best and compare the "best" version to the other algorithms we looked at. Below you will find an explanation of each of the rules in the order used for the analysis along with some control charts illustrating what each rule will flag (Figure \ref{fig:sample_western_electric_rules}).
+
+- **Rule 1** checks if the last point is outside the control limits, which are defined as $\mu \pm 3\sigma$ where $\mu$ (mu) is the mean and $\sigma$ (sigma) is the standard deviation. This means that the last point was well beyond what we would expect to see for a given distribution. For instance, if we assume a normal distribution for our data, we expect 99.7% of our data points to be within 3 standard deviations of the mean, so we definitely want to know about that 0.15% that fall outside on a given side of the mean ($\frac{0.3}{2}$). 
+
+- **Rule 2** checks if 2 out of 3 last points fall beyond $\pm 2$ standard deviations on the same side of the centerline (the mean). This is a less extreme version of rule 1; here, we require more points, but they don't have to be as far from the mean. Violation of this rule means the variation in the series is increasing. Again if we are using a normal distribution, we are looking for points that fall outside of where 95% of them lie. Note that we are only looking for points on one side of the mean; this means we are looking for the 2.5% of points that fall outside our desired range (to a given side of the mean). 
+
+- **Rule 3** checks if 4 out of 5 last points fall beyond $\pm 1$ standard deviation on the same side of the centerline. Violation of this rule as with rule 2 indicates that the variation of the series is increasing, but to a lesser degree and possibly not as rapidly as with rule 2 (should performance continue this way). When looking at the normal, we expect 68% of the points to not violate this rule; therefore, we are requiring even more points than with rule 2 to fulfill this requirement. Since we are only looking for points to one side of the mean, so we are looking at 16% of points that would be in this area. 
+
+- The **trend rule** checks if 6 consecutive points going up or down. This happens when we are ramping up or perfomance is slowly declining over time; the latter is definitely something we would want to know about. It is important to note that this rule is not taking account the magnitude of the increase or decrease point to point. This means that we might find ourselves in a situation where the value drops (or rises) day after day by an insignificant amount (like 1 click if we are talking hundreds or thousands of clicks a day); the trend rule would trigger an alert in that case which would obviously be a false positive. However, one would assume that changes have larger magnitudes and the confluence of circumstances to have several days of declining/inclining performance along with miniscule differences in values day-over-day to be rare, so hopefully this won't be an issue for our purposes. Of course we could put a limit on the magnitude of the change, but that introduces a parameter that will vary by time series and be subjective. 
+
+- The **mixture rule** checks if 8 consecutive points outside of $\pm 1$ standard deviation on either side of the mean. This is a sign that things are starting to get erratic and stray from the mean. The mixture rule is a variation on rule 3. Here, we require more points, and they have to be consecutive, because now we are more concerned with the spread to *either side* of the mean. This is where we expect 32% of the points in the normal distribution to be. 
+
+- The **stratification rule** checks if 15 consecutive datapoints within $\pm 1$ standard deviation on either side of the mean. This may not seem like an alert in our context, since the mean is becoming a more accurate descriptor of where we could expect future performance to lie, but this means that the underlying distribution is changing---something we might want to know about. Using the normal, we expect 68% of the points to fall in the "stratification" range; therefore, seeing 15 consecutive points in this region, may indicate that our assumptions about the data aren't true anymore. This is probably more of an issue when you have to estimate the values and stick with them for a while; for `SCOPE`, these values will be calculated from the sample every time we run which is why this rule is ranked near the bottom. 
+
+- **Rule 4** checks if 9 consecutive points fall on the same side of the mean. This would mean that the average is no longer a good descriptor of future performance, since the last several points were all above or below it and not spread. In this case, we aren't necessarily concerned with the distance from the mean in standard deviations, but the most recent points all being above or below the mean when we would expect them to straddle the mean. Again this is probably more of an issue when you can't calculate the summary statistics (mean and standard deviation) each time, so we rank it low in importance. 
+
+- The **noise rule** checks for constant oscillation in a series---if 14 points in a row alternate in direction, increasing then decreasing or vice versa. As the name suggests, series that get flagged for this alert, may not have anything meaningful for us to interpret---it may just be noise. For our purposes, we have many erratic series or even normal ones that oscillate, because they won't always be the same value every day. We could easily trigger this too many times, so we rank this last. 
+
+- The "No Violations" chart won't flag any of the rules above, but it doesn't necessarily mean that we don't have any alert-worthy data.
+
+```{r sample_western_electric_rules, fig.cap="\\label{fig:sample_western_electric_rules}Western Electric Rule Violation Examples", fig.height=8, fig.width = 10, echo=FALSE}
+cowplot::plot_grid(control_chart(beyond_control_limits), 
+                   control_chart(break_rule_2), 
+                   control_chart(break_rule_3),
+                   control_chart(break_trend_rule),
+                   control_chart(break_mixture_rule), 
+                   control_chart(break_stratification_rule),
+                   control_chart(break_rule_4), 
+                   control_chart(break_noise_rule), 
+                   control_chart(no_issues), 
+                   labels = c("Rule 1", "Rule 2", "Rule 3", "Trend Rule", "Mixture Rule", 
+                              "Stratification Rule", "Rule 4", "Noise Rule", "No Violations"), 
+                   ncol = 3, nrow = 3, label_x = 0.15, hjust = 0, label_size = 10, vjust = 0, label_y = 0.925)
+```
+
+*Note that, in Figure \ref{fig:sample_western_electric_rules}, each graph has different data meaning UCL, LCL, etc. won't be the same across graphs, so they won't line up in the grid.*
+
+#### Results
+```{r calculate-western-electric-alerts, echo = FALSE, eval = FALSE}
+western_electric_AS_results <- western_electric_pipeline_AS(AS_data)
+western_electric_TS_results <- western_electric_pipeline_TS(TS_data)
+western_electric_RexT_results <- western_electric_pipeline_RexT(RexT_data)
+
+western_electric_rules_order <- c("Rule 1", "Rule 2", "Rule 3", "Trend", "Mixture", "Stratification", "Rule 4", "Noise")
+
+AS_client_results_by_western_electric_rule <- western_electric_AS_results %>% 
+  dplyr::filter(is_alert, campaign_name == "NOT A CAMPAIGN") %>% 
+  group_by(reason) %>% 
+  summarize(count = n()) %>% 
+  mutate(reason = factor(gsub(" violation", "", gsub(" rule", "", reason)), 
+                         levels = western_electric_rules_order, ordered = TRUE),
+         percent_of_total = count/sum(count)) %>%
+  arrange(reason) %>% 
+  mutate(series = "AS", cum_sum = cumsum(percent_of_total))
+
+TS_results_by_western_electric_rule <- western_electric_TS_results %>% 
+  dplyr::filter(is_alert) %>% 
+  group_by(reason) %>% 
+  summarize(count = n()) %>% 
+  mutate(reason = factor(gsub(" violation", "", gsub(" rule", "", reason)), 
+                         levels = western_electric_rules_order, ordered = TRUE),
+         percent_of_total = count/sum(count)) %>%
+  arrange(reason) %>% 
+  mutate(series = "TS", cum_sum = cumsum(percent_of_total))
+
+RexT_results_by_western_electric_rule <- western_electric_RexT_results %>% 
+  dplyr::filter(is_alert) %>% 
+  group_by(reason) %>% 
+  summarize(count = n()) %>% 
+  mutate(reason = factor(gsub(" violation", "", gsub(" rule", "", reason)), 
+                         levels = western_electric_rules_order, ordered = TRUE),
+         percent_of_total = count/sum(count)) %>%
+  arrange(reason) %>% 
+  mutate(series = "RexT", cum_sum = cumsum(percent_of_total))
+
+results_by_western_electric_rule <- rbind(AS_client_results_by_western_electric_rule,
+                                          TS_results_by_western_electric_rule,
+                                          RexT_results_by_western_electric_rule)
+
+# isolate to only rule 1 results (mark others as false) for further analysis
+western_electric_rule_1_AS_results <- western_electric_AS_results %>%
+    mutate(reason = ifelse(reason != "Rule 1 violation", "N/A", reason),
+           is_alert = ifelse(reason == "N/A", FALSE, is_alert))
+western_electric_rule_1_TS_results <- western_electric_TS_results %>%
+    mutate(reason = ifelse(reason != "Rule 1 violation", "N/A", reason),
+           is_alert = ifelse(reason == "N/A", FALSE, is_alert))
+western_electric_rule_1_RexT_results <- western_electric_RexT_results %>%
+    mutate(reason = ifelse(reason != "Rule 1 violation", "N/A", reason),
+           is_alert = ifelse(reason == "N/A", FALSE, is_alert))
+
+western_electric_AS_alert_counts <- western_electric_AS_counts(western_electric_rule_1_AS_results %>%
+                                                                 dplyr::filter(run_date == AS_TS_beginning_date), 
+                                                               western_electric_rule_1_AS_results %>%
+                                                                 dplyr::filter(run_date == AS_TS_middle_date), 
+                                                               western_electric_rule_1_AS_results %>%
+                                                                 dplyr::filter(run_date == AS_TS_end_date), 
+                                                               rule = "Rule 1")
+western_electric_AS_metric_alert_counts <- western_electric_AS_metric_counts(western_electric_rule_1_AS_results %>%
+                                                                               dplyr::filter(run_date == AS_TS_beginning_date), 
+                                                                             western_electric_rule_1_AS_results %>%
+                                                                               dplyr::filter(run_date == AS_TS_middle_date), 
+                                                                             western_electric_rule_1_AS_results %>%
+                                                                               dplyr::filter(run_date == AS_TS_end_date), 
+                                                                             rule = "Rule 1")
+western_electric_TS_alert_counts <- western_electric_TS_counts(western_electric_rule_1_TS_results %>%
+                                                                 dplyr::filter(run_date == AS_TS_beginning_date), 
+                                                               western_electric_rule_1_TS_results %>%
+                                                                 dplyr::filter(run_date == AS_TS_middle_date), 
+                                                               western_electric_rule_1_TS_results %>%
+                                                                 dplyr::filter(run_date == AS_TS_end_date), 
+                                                               rule = "Rule 1")
+western_electric_TS_metric_alert_counts <- western_electric_TS_metric_counts(western_electric_rule_1_TS_results %>%
+                                                                               dplyr::filter(run_date == AS_TS_beginning_date), 
+                                                                             western_electric_rule_1_TS_results %>%
+                                                                               dplyr::filter(run_date == AS_TS_middle_date), 
+                                                                             western_electric_rule_1_TS_results %>%
+                                                                               dplyr::filter(run_date == AS_TS_end_date), 
+                                                                             rule = "Rule 1")
+western_electric_RexT_alert_counts <- western_electric_RexT_counts(western_electric_rule_1_RexT_results,
+                                                                   exec_beginning_dates, 
+                                                                   exec_middle_dates, 
+                                                                   exec_end_dates, 
+                                                                   "Rule 1")
+western_electric_RexT_territory_alert_counts <- western_electric_RexT_territory_counts(western_electric_rule_1_RexT_results, 
+                                                                                       exec_beginning_dates, 
+                                                                                       exec_middle_dates, exec_end_dates, 
+                                                                                       "Rule 1")
+
+save(western_electric_AS_results, western_electric_TS_results, 
+     western_electric_RexT_results, western_electric_rules_order,
+     AS_client_results_by_western_electric_rule, TS_results_by_western_electric_rule,
+     RexT_results_by_western_electric_rule, results_by_western_electric_rule,
+     western_electric_AS_alert_counts, western_electric_AS_metric_alert_counts,
+     western_electric_TS_alert_counts, western_electric_TS_metric_alert_counts,
+     western_electric_RexT_alert_counts, western_electric_RexT_territory_alert_counts,
+     western_electric_rule_1_AS_results, western_electric_rule_1_TS_results,
+     western_electric_rule_1_RexT_results, file = params$western_electric_results_file)
+```
+
+```{r load-western-electric-results, echo = FALSE}
+load(params$western_electric_results_file)
+```
+
+Before diving into how this method performed on the data, I want to look holistically at the distributions of the rules violated to see which rules are most sensitive and gather intuition of their strengths and weaknesses in the context of our data. I will determine if we can exclude any rules on a per-product (AS, TS, RexT) basis.
+
+Remember that we have ranked our rules in order of what constitutes a serious issue to less serious ones. That order is: rule 1, rule 2, rule 3, trend, mixture, stratification, rule 4, and noise. The algorithm will *only* flag the most serious violation it finds; for example, if rule 1 and the trend rule would both be triggered, *only* rule 1 will be reported. This means that for each time series we know what was the most serious violation, but not all the violations. Likewise, for something to be flagged as violating rule 2, it can't violate rule 1. One would expect that the most serious violations (the ones the algorithm checks for first) should have fewer violations overall than the looser rules.
+
+```{r alerts_by_western_electric_rule, fig.cap="\\label{fig:alerts_by_western_electric_rule}Alerts flagged at each rule in the Western Electric rules cascade", echo=FALSE}
+# percent of rules flagged at each step 
+# (steps to the right can only be triggered if those to the left aren't)
+results_by_western_electric_rule %>% 
+  ggplot2::ggplot(aes(x = reason, y = percent_of_total, 
+                      fill = factor(series, levels = c("AS", "TS", "RexT"), ordered = TRUE))) +
+  ggplot2::geom_col(position = "dodge") + 
+  ggplot2::labs(x = "Rule Violated", y = "% of total alerts", fill = "", 
+                title = "Alerts Triggered by Western Electric Rule",
+                caption = "*Rules to the right can only be triggered if those to the left aren't") +
+  ggplot2::scale_y_continuous(labels = scales::percent) + 
+  case_study_theme() + 
+  ggplot2::theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+Looking at the percent of total alerts that was triggered at each stage of the algorithm in Figure \ref{fig:alerts_by_western_electric_rule}, we see that rule 1 and rule 2 are roughly equivalent for AS and RexT while we actually have more rule 1 alerts than rule 2 for TS. From this graph, we learn that much fewer AS metric time series experience values outside of 3 standard deviations from the mean compared to TS and RexT which are roughly equal. Going to rule 3, we see large jumps in the percentage of total alerts; a third of the alerts for RexT violate rule 3. Again, we expect rule 3 to have more violations than rule 1 and rule 2 because it is less strict. The trend rule triggers much smaller share of the alerts, however, the violations for the TS time series is even smaller than the AS and RexT. This is most likely due to TS time series being relatively stable; we wouldn't expect 6 points in a row all increasing or all decreasing---normal for AS or RexT series due to ramping up, things being turned off or territory level seasonality (i.e. holiday seasons). 
+
+We essentially have no alerts using the mixture rule; this could mean one of two things: either all the erraticism also violates one of the 4 previously checked rules, or we don't have series with so many points outside of one standard deviation.  With the stratification rule, we see the largest population of alerts for the AS and large volumes for TS and RexT; this means that we actually see lots of series (especially for AS metrics) where the last quarter of the dates (15/60 days) we take into account when checking for anomalies are within one standard deviation of the mean. This makes sense because we would expect our data to go through phases, i.e. increase/decrease for a few days, find new level, stay for a while, increase/decrease, etc. We also see large amounts of alerts triggered for rule 4; the TS alerts have the highest percentage here---possibly due to monthly or yearly seasonality where the series could acheive a higher- or lower-level than the mean dictates, and due to the overall stability of the series, stay there. Somewhat surprisingly, we hardly have any violations of the noise rule; this is most likely due to the fact that while we do have noise in our series, they do not perfectly alternate increases and decreases for 2 weeks straight. 
+
+It is also interesting to note that for RexT data, rules 3 and 4 trigger over half of all the alerts. For AS series, stratification and rule 4 account for nearly 70% alerts; TS series have almost 80% of the alerts across rule 3, stratification, and rule 4. This begs the question: given that these alerts are the less serious ones, should we really have such a large percentage of our alerts caught here? (meaning most of the flagged alerts are of the less serious---and likely false positive---kind). Furthermore, for AS (campaign + client) and TS (site- and tag-level) series we are triggering over 5 thousand series as alerts each! It's pretty clear, right off the bat, that we can't use all these rules for our purposes.
+
+In order to provide an initial insight on which rules to stop using, we can try to find a point in where, after evaluating a certain number of rules to reach that point, we have reduced our alerts to a reasonable percentage of the original number.  
+
+```{r western_electric_alerts_by_rule_cdf, fig.cap="\\label{fig:western_electric_alerts_by_rule_cdf}Cummulative percentage of alerts triggered at each stage of the Western Electric rules cascade", echo=FALSE}
+results_by_western_electric_rule %>% 
+  ggplot2::ggplot(aes(x = reason, y = cum_sum,
+                      col = factor(series, levels = c("AS", "TS", "RexT"), ordered = TRUE))) +
+  ggplot2::geom_step(aes(group = factor(series, levels = c("AS", "TS", "RexT"), ordered = TRUE)), size = 1.05) + 
+  ggplot2::labs(x = "Rule Violated", y = "% of total flagged", col = "",
+                title = "Cummulative Percentage of Alerts Triggered",
+                caption = "*Rules to the right can only be triggered if those to the left aren't") +
+  ggplot2::scale_y_continuous(labels = scales::percent) +
+  case_study_theme() + 
+  ggplot2::theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+By looking at the cummulative percentage of the alerts triggered (Figure \ref{fig:western_electric_alerts_by_rule_cdf}), we can see as we check each rule, how much of the alerts have already been triggered. For example, we can observe that after triggering the alerts for rule 2, we have triggered about 10% of the AS alerts (triggered at rule 1 + triggered from rule 2), 18% of the TS alerts, and 21% of the RexT alerts. We can also see the huge jump across the board from the stratification rule here (along with rule 3 and 4) as well.
+
+Note that any analysis from here on out as to the effectiveness of each rule has a bias. I have ranked the rules in importance for our purposes initially, and we are only flagging less important rule violations if the most important ones haven't been flagged beforehand. This means that when we evaluate say the stratification rule, we aren't evaluating the performance of the rule on it's own, but it's relevance in that spot in the hierarchy. It's crucial to keep this in mind, however, we can take into account the volume of alerts that are coming from that alert, along with the fact that the volume is only a subset of what it could have been without the hierachy. If a rule doesn't perform well in this context we will likely want to remove it, but what we are actually looking to do is determine if there are rules that absolutely need to be removed (i.e. whatever they do flag is most irrelevant) or the rule after which all additional rules don't really contribute anything to the task at hand. It's possible that these cutoff points are different for AS, TS, and RexT as we saw their distributions of alerts across the rules was different at each step (although following a high-level pattern of increasing sharply for certain rules).
+
+Since we have essentially no alerts for mixture and noise, we can start by removing those rules from the algorithm. Noise was the last rule to check, so we can assume a series that would have flagged there (if any) was flagged by one of the more important rule; and therefore, the noise rule is either redundant or irrelevant for the data. Mixture was in the middle of the rule list, however, we can assume that almost all of the alerts that would have been flagged by this rule as a stand-alone test have been caught in the more important (and stricter) rules.
+
+
+##### Preliminary Analysis of Rules
+Given that this method as a whole is triggering way too many alerts using all the rules, we clearly need to find the cutoff point. In order to look at where the cutoff point should be, I will check the performance using multiple rules. Note that we can't do rule 1 and rule 3 without thinking about the series that could have been flagged by both rule 2 and 3---this will skew the numbers; instead, I will look at which rule should be the last rule we check and ignore alerts triggered on rules following that one. 
+
+As such, I will first look to eliminate the second half of the checks (mixture, stratification, rule 4, and noise) of which we only have to look further into stratification and rule 4, since mixture and noise have been ruled irrelevant for our data.  The stratification rule---being the most sensitive---is the best rule to evaluate first. As expected, the performance of the stratification rule is atrocious for the AS data (see Table \ref{tabs:western_electric_stratification_performance}); keep in mind that this alert is triggered when performance is pretty similar day-after-day for a 2 week period which is actually a good sign for us. The performance is even more horrid for the TS data with a lower percentage of the "alerts" being true positives. For the RexT data points, we have comparatively few true positives, but we do have false negatives. It's clear this rule isn't helping us with this data. 
+
+```{r western_electric_stratification_performance, echo=FALSE}
+kable(western_electric_rule_confusion_matrix(AS_data = western_electric_AS_results, 
+                                             TS_data = western_electric_TS_results, 
+                                             RexT_data = western_electric_RexT_results, 
+                                             logs = logs, 
+                                             rule = "Stratification", 
+                                             rules_order = western_electric_rules_order),
+      row.names = FALSE, digits = 2, format.args = list(big.mark = ","), 
+      caption = "\\label{tabs:western_electric_stratification_performance}Performance stopping after stratification rule")
+```
+
+Table \ref{tabs:western_electric_rule_4_performance} shows the performance of stopping after running rule 4. Even though this rule is run near the end, we trigger many alerts and most of them are false positives. It's safe to say we can cut this from our algorithm as well. Remember, rule 4 checked if several consecutive points fall on the same side of the mean. This is important if we care about the overall pattern of our data changing slightly, but not really necessary for our purposes.
+```{r western_electric_rule_4_performance, echo=FALSE}
+kable(western_electric_rule_confusion_matrix(AS_data = western_electric_AS_results, 
+                                             TS_data = western_electric_TS_results, 
+                                             RexT_data = western_electric_RexT_results, 
+                                             logs = logs, 
+                                             rule = "Rule 4", 
+                                             rules_order = western_electric_rules_order),
+      row.names = FALSE, digits = 2, format.args = list(big.mark = ","), 
+      caption = "\\label{tabs:western_electric_rule_4_performance}Performance of stopping after rule 4")
+```
+
+Now, for the first half of the rules. It was pretty obvious we needed to trim the last two rules from our algorithm based on the amount of alerts they triggered so late in the process---there couldn't possibly that many issues! However, it's not as easy to determine what to trim from the first half of the rules: we once again are faced with the issue of trying to capture more alerts or focusing on providing the most relevant alerts. We probably don't want more than half of our alerts to be false positives, but how much should we tolerate? Here, I'm going to see how many rules we can use to maximize our `F1-score` without sending our false positives through the roof. 
+
+Rule 1 will be used regardless and will serve as the baseline to determine if adding another rule helps or hurts this method's performance. As with most of the methods we looked at thus far, rule 1 performs best on the RexT data although `precision` is way better than `recall` (see Table \ref{tabs:western_electric_end_after_rule_1_performance}). Notice that the false negatives for the AS data are outstandingly high! AS alerts clearly aren't always as obvious as being far from the mean. The TS data has the worst `precision` of all, but not the worst `F1-score` because it doesn't have nearly as many false negatives as the AS data.
+```{r western_electric_end_after_rule_1_performance, echo=FALSE}
+kable(western_electric_rule_confusion_matrix(AS_data = western_electric_AS_results, 
+                                             TS_data = western_electric_TS_results, 
+                                             RexT_data = western_electric_RexT_results, 
+                                             logs = logs, 
+                                             rule = "Rule 1", 
+                                             rules_order = western_electric_rules_order),
+      row.names = FALSE, digits = 2, format.args = list(big.mark = ","), 
+      caption = "\\label{tabs:western_electric_end_after_rule_1_performance}Performance of stopping after rule 1")
+```
+
+If we add in rule 2, our `precision` on RexT data takes a huge hit, as seen in Table \ref{tabs:western_electric_end_after_rule_2_performance}! We correctly identify another alert, however, we completely destroy our `precision` and end with a slightly lower `F1-score`. We do see slight improvement in `F1-score` for the TS data; however, now our false positives outnumber our true positives for TS data. This is a dangerous situation to be in---if more than half of the alerts we send out are not actually alerts, people won't pay attention to them anymore and will miss the true alerts. AS data also sees a small increase in `F1-score`, but we also significantly increase our false positives. The ratio of false positives to true positives isn't quite as bad as the TS one, however, it may be difficult to stand behind using this model in production.
+```{r western_electric_end_after_rule_2_performance, echo=FALSE}
+kable(western_electric_rule_confusion_matrix(AS_data = western_electric_AS_results, 
+                                             TS_data = western_electric_TS_results, 
+                                             RexT_data = western_electric_RexT_results, 
+                                             logs = logs, 
+                                             rule = "Rule 2", 
+                                             rules_order = western_electric_rules_order),
+      row.names = FALSE, digits = 2, format.args = list(big.mark = ","), 
+      caption = "\\label{tabs:western_electric_end_after_rule_2_performance}Performance stopping after rule 2")
+```
+
+By adding in rule 3 (Table \ref{tabs:western_electric_end_after_rule_3_performance}), we now have all data sets with more false positives than true positives (more than double for TS data). Although we get some improvement in our `F1-score` for AS data, and our TS and RexT `F1-score`'s stay roughly the same, this is clearly unacceptable. Therefore, for the remainder of the analysis on this method, I will use only rule 1.
+```{r western_electric_end_after_rule_3_performance, echo=FALSE}
+kable(western_electric_rule_confusion_matrix(AS_data = western_electric_AS_results, 
+                                             TS_data = western_electric_TS_results, 
+                                             RexT_data = western_electric_RexT_results, 
+                                             logs = logs, 
+                                             rule = "Rule 3", 
+                                             rules_order = western_electric_rules_order),
+      row.names = FALSE, digits = 2, format.args = list(big.mark = ","), 
+      caption = "\\label{tabs:western_electric_end_after_rule_3_performance}Performance stopping after rule 3")
+```
+
+Should we go another step forward and add the trend rule (see Table \ref{tabs:western_electric_end_after_trend_rule_performance}), we observe marginal improvements over stopping at rule 3, however, they aren't enough to beat stopping at rule 1.
+```{r western_electric_end_after_trend_rule_performance, echo=FALSE}
+kable(western_electric_rule_confusion_matrix(AS_data = western_electric_AS_results, 
+                                             TS_data = western_electric_TS_results, 
+                                             RexT_data = western_electric_RexT_results, 
+                                             logs = logs, 
+                                             rule = "Trend", 
+                                             rules_order = western_electric_rules_order),
+      row.names = FALSE, digits = 2, format.args = list(big.mark = ","), 
+      caption = "\\label{tabs:western_electric_end_after_trend_rule_performance}Performance stopping after trend rule")
+```
+
+Note how each time we added a rule (besides rule 1), we added more false positives than true positives. This means that we can't really use a method like this for our data. What determines an alert, unfortunately, can't be captured be a rule-based system as we have seen with all the models thus far. There are many more intricasies than these systems can account for.
+
+##### AS
+We see significantly less alerts during the middle of the month compared to the beginning and end of the month. This is in line with our intuition that performance is very different for these times; we can experienece spikes and dips that are actually expected. Since this method catches large variations from the average, we should expect more alerts during the beginning and the end of the month. The same pattern can be observed on a by metric basis with RexT, CR, and order value having larger disparities. Note that we have also seen this pattern before with other methods. Using the boxplots in Figure \ref{fig:western_electric_AS_results_graphs}, we see significantly less variation during the end of the month for alerts per client and overall 50% of clients have between 1 and 3 alerts. There is actually less variation in alerts per campaign with this method; 50% of the time we have between 1 and 2 for the middle and end of the month. Campaign alerts per client are between 1 and 4 50% of the time with all clients having less than 30 campaign alerts.
+
+```{r western_electric_AS_results_graphs, fig.cap="\\label{fig:western_electric_AS_results_graphs}AS alert counts using Western Electric Rule 1", fig.width=9, fig.height=6.2, echo=FALSE}
+arrange_AS_alert_count_graphs(overall_results_count = western_electric_AS_alert_counts, 
+                              metrics_count = western_electric_AS_metric_alert_counts)
+```
+
+In Table \ref{tabs:western_electric_AS_results_metis_comparison_overall}, the data collected from `Metis` is compared to what was flagged by Western Electric Rule 1. For middle of the month, we are hardly triggering any false positives, however, we are missing plenty of actual alerts. This gives us the worst overall performance. Beginning and end of the month have better performance despite, having more alerts (and false positives). The performance as a whole though isn't great. We are performing much better for RexT Euro and margin than our overall score, although not great. The worst performances are on clicks and COS. There are quite a few metrics with perfect `precision`, but this many times is because we are missing alerts (false negatives).
+```{r western_electric_AS_results_metis_comparison_overall, echo = FALSE}
+# perhaps it makes sense to display the confusion matrix here instead
+western_electric_AS_alerts_comparison <- western_electric_AS_confusion_matrix(western_electric_AS_results %>% 
+                                                                                dplyr::filter(run_date == AS_TS_beginning_date), 
+                                                                              western_electric_AS_results %>% 
+                                                                                dplyr::filter(run_date == AS_TS_middle_date), 
+                                                                              western_electric_AS_results %>% 
+                                                                                dplyr::filter(run_date == AS_TS_end_date), 
+                                                                              logs,
+                                                                              "Rule 1", 
+                                                                              western_electric_rules_order)
+kable(western_electric_AS_alerts_comparison, 
+      digits = 2, format.args = list(big.mark = ","), 
+      caption = "\\label{tabs:western_electric_AS_results_metis_comparison_overall}Prediction vs. Metis for AS alerts using Western Electric Rule 1")
+```
+
+```{r western-electric-AS-results-metis-comparison-metric, echo = FALSE}
+# perhaps it makes sense to display the confusion matrix here instead
+western_electric_AS_metrics_alerts_comparison <- western_electric_AS_metrics_confusion_matrix(western_electric_AS_results %>% 
+                                                                                                dplyr::filter(run_date == AS_TS_beginning_date), 
+                                                                                              western_electric_AS_results %>% 
+                                                                                                dplyr::filter(run_date == AS_TS_middle_date), 
+                                                                                              western_electric_AS_results %>% 
+                                                                                                dplyr::filter(run_date == AS_TS_end_date), 
+                                                                                              logs,
+                                                                                              "Rule 1", 
+                                                                                              western_electric_rules_order)
+kable(western_electric_AS_metrics_alerts_comparison %>%  
+        dplyr::filter(as.character(Metric) != "**Total**") %>% 
+        dplyr::arrange(as.character(Metric)), 
+      row.names = FALSE, digits = 2, format.args = list(big.mark = ","))
+```
+
+##### TS
+We observe the same trend with the TS data as with the AS data: middle of the month triggers comparatively fewer alerts. This disparity is visible both with the site level alerts and the tag level alerts. Other than this pattern also being present in the overall numbers, there isn't anything of note when looking at the event name and site type breakouts. With this method, we have hardly any variation in alert counts for event names with alerts, but variation of 1-4 in the most extreme variations of site type alerts (Figure \ref{fig:western_electric_TS_results_graphs}). For example, the tablet tag during the end of the month has 1-5 alerts for 50% of the clients.
+
+Quite suprisingly (and perhaps beyond explanation), we perform much better for beginning of the month compared to the other times (see Table \ref{tabs:western_electric_TS_results_metis_comparison_overall}). The performance isn't something we can use in production, however, it is one of the best we have seen so far and is better than the performance on the AS data. 
+
+This method performs best on site-level, listing, and sales tag and the worst on homepage. There most likely isn't any underlying reason, just the fact that it is a small amount of alerts triggered in total for each event name. The desktop site type performs the best along with AIOS, however, it is a very small sample size. Take this with a grain of salt, though, because the site types with decent sample sizes are pretty mediocre in performance. 
+```{r western_electric_TS_results_metis_comparison_overall, echo = FALSE}
+# perhaps it makes sense to display the confusion matrix here instead
+western_electric_TS_alerts_comparison <- western_electric_TS_confusion_matrix(western_electric_TS_results %>% 
+                                                                                dplyr::filter(run_date == AS_TS_beginning_date), 
+                                                                              western_electric_TS_results %>% 
+                                                                                dplyr::filter(run_date == AS_TS_middle_date), 
+                                                                              western_electric_TS_results %>% 
+                                                                                dplyr::filter(run_date == AS_TS_end_date), 
+                                                                              logs,
+                                                                              "Rule 1",
+                                                                              western_electric_rules_order)
+kable(western_electric_TS_alerts_comparison, 
+      digits = 2, format.args = list(big.mark = ","), 
+      caption = "\\label{tabs:western_electric_TS_results_metis_comparison_overall}Prediction vs. Metis for TS alerts using Western Electric Rule 1")
+```
+
+\pagebreak
+
+```{r western-electric-TS-results-metis-comparison-tag-event, echo = FALSE}
+# perhaps it makes sense to display the confusion matrix here instead
+western_electric_TS_metrics_comparision <- western_electric_TS_metrics_confusion_matrix(western_electric_TS_results %>% 
+                                                                                          dplyr::filter(run_date == AS_TS_beginning_date), 
+                                                                                        western_electric_TS_results %>% 
+                                                                                          dplyr::filter(run_date == AS_TS_middle_date), 
+                                                                                        western_electric_TS_results %>% 
+                                                                                          dplyr::filter(run_date == AS_TS_end_date), 
+                                                                                        logs,
+                                                                                        "Rule 1",
+                                                                                        western_electric_rules_order)
+kable(western_electric_TS_metrics_comparision$event_name %>%  
+        dplyr::filter(as.character(Metric) != "**TOTAL**") %>% 
+        dplyr::arrange(as.character(Metric)), 
+      row.names = FALSE, digits = 2, format.args = list(big.mark = ","))
+```
+
+```{r western-electric-TS-results-metis-comparison-tag-site-type, echo = FALSE}
+# perhaps it makes sense to display the confusion matrix here instead
+kable(western_electric_TS_metrics_comparision$site_type %>%  
+        dplyr::filter(as.character(Metric) != "**Total**") %>% 
+        dplyr::arrange(as.character(Metric)), 
+      row.names = FALSE, digits = 2, format.args = list(big.mark = ","))
+```
+
+```{r western_electric_TS_results_graphs, fig.cap="\\label{fig:western_electric_TS_results_graphs}TS alert counts using Western Electric Rule 1", fig.width=9, fig.height=7, echo=FALSE}
+arrange_TS_alert_count_graphs(overall_results_count = western_electric_TS_alert_counts, 
+                              metrics_count = western_electric_TS_metric_alert_counts)
+```
+
+##### Territory RexT
+As we have seen with prior methods presented in this paper for anomaly detection, we have more alerts the more granular we get (country has more than subregion which has more than region). When looking at the territory breakdown, we still see Argentina with the most alerts which is consistent with the prior anomaly detection methods discussed. With the RexT data, we have hardly any variation at all; we only have 2 sections where 50% (or more) of the distribution isn't just at 0 (see Figure \ref{fig:western_electric_RexT_results_graphs}). 
+
+```{r western_electric_RexT_results_graphs, fig.cap="\\label{fig:western_electric_RexT_results_graphs}RexT alert counts using Western Electric Rule 1", fig.width=9, fig.height=6, echo=FALSE}
+arrange_RexT_alert_count_graphs(western_electric_RexT_alert_counts, 
+                                western_electric_RexT_territory_alert_counts)
+```
+
+As usual, we perform the best on RexT data as shown in Table \ref{tabs:western_electric_RexT_results_metis_comparison_overall}; although TS data is a close second. We also observe the same disparity between time of month as with the AS and TS series. Our performance, here, is at its best during the end of month and worst during the middle. We have generally low `precision` and high `recall` for possibly the first time when looking at the territory level; however, we don't really perform well on any territory. This method doesn't work too well for RexT data.
+```{r western_electric_RexT_results_metis_comparison_overall, echo = FALSE}
+# perhaps it makes sense to display the confusion matrix here instead
+western_electric_RexT_comparison <- western_electric_exec_confusion_matrix(western_electric_RexT_results, 
+                                                                           logs, 
+                                                                           beginning_dates = exec_beginning_dates, 
+                                                                           middle_dates = exec_middle_dates, 
+                                                                           end_dates = exec_end_dates, 
+                                                                           rule = "Rule 1",
+                                                                           rules_order = western_electric_rules_order)
+kable(western_electric_RexT_comparison, 
+      row.names = FALSE, digits = 2, 
+      caption = "\\label{tabs:western_electric_RexT_results_metis_comparison_overall}Prediction vs. Metis for territory RexT alerts using Western Electric Rule 1")
+```
+
+```{r western-electric-RexT-results-metis-comparison-by-territory, echo = FALSE}
+# perhaps it makes sense to display the confusion matrix here instead
+western_electric_RexT_territory_comparison <- western_electric_exec_territories_confusion_matrix(western_electric_RexT_results, logs, "Rule 1", western_electric_rules_order)
+kable(western_electric_RexT_territory_comparison %>% 
+        dplyr::filter(as.character(Territory) != "**Total**"), 
+      row.names = FALSE, digits = 2)
+```
+
+
+#### ROC Curve
+Since this model yields a `TRUE`/`FALSE` answer to whether a given point is an anomaly, we don't have a threshold we can alter and will provide the ROC "points" instead (Figure \ref{fig:western_electric_roc_points}). As usual, we see that RexT appears to have the best performance followed by TS and AS, respectively. This is most likely due to the aggregated nature of the RexT time series; we wouldn't expect such a large change to happen to cause one day to be more than three standard deviations from the mean---it is a bit extreme---giving us few false positives. However, this extreme behavior is much more likely in TS, and especially, AS data. As we saw above, this method performs best on the RexT data with consistently higher true positive rates at low false positive rates.
+
+```{r western_electric_roc_points, fig.cap="\\label{fig:western_electric_roc_points}ROC curve using Western Electric rule 1", echo = FALSE, warning=FALSE, fig.height=2.2}
+ROC_curve_points(AS_data = rbind(western_electric_AS_alerts_comparison, 
+                                 western_electric_AS_metrics_alerts_comparison %>% 
+                                   rename(Date = Metric)), 
+                 # use the fixed TS data here bc they are the same
+                 TS_data = rbind(western_electric_TS_alerts_comparison,
+                                 western_electric_TS_metrics_comparision$event_name %>% 
+                                   rename(Date = Metric), 
+                                 western_electric_TS_metrics_comparision$site_type %>% 
+                                   rename(Date = Metric)), 
+                 exec_data = rbind(western_electric_RexT_comparison, 
+                                   western_electric_RexT_territory_comparison %>% 
+                                     rename(Date = Territory)),
+                 method_name = 'Western Electric Rule 1')
+```
+
+#### Alogrithm Complexity  
+This process can take quite long to calculate each alert and requires the use of the R package `data.table` to run in production in a reasonable amount of time. This will only get worse the more metrics we add. Average complexity ($\Theta$):
+
+\begin{equation}
+\centering
+  \Theta(n) = (k * n)^2
+\label{eq:western_electric_big_o}
+\end{equation}
+
+*where*:
+
+* *$n$ = number of series to inspect (i.e. total number of clients + total number of campaigns)*
+* *$k$ = number of KPIs to inspect (for each series)*
+
+This gives us an overall quadratic complexity ($\Theta(n^2)$) since $k$ should always be way less than $n$ as well as a tight best-case of $\Omega(n^2)$ and tight worst-case of $O(n^2)$. Note that this is much slower than the mean/median methods. For large $n$, we would be much better off with a faster algorithm if one exists.
+
+#### Conclusions
+Initially, this method had a lot of promise---rules of varying severity that have been used for years to identify time series that are out-of-control. However, they don't seem to work very well with all our data. Many of the rules were overly sensitive and quite suprisingly values outside three standard deviations from the mean aren't always seen as anomalies. This method worked best on RexT and TS, but each method we have tried so far works better (although definitely not great) for one data type. This gives us a "best" rules-based method for each; our goal is to find a method that works well for all our data. The failure of this method further motivates the finding that a rules-based approach is not truly understanding our data, and we need to use machine learning where we will have more fine-tuned control.

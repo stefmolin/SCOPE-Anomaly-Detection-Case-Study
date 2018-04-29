@@ -1,0 +1,473 @@
+---
+title: "Twitter AnomalyDetection Package"
+author: "Stefanie Molin"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output: html_document
+---
+
+```{r twitter-template-setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# load the case study library
+library(modelAnalyzeR)
+library(dplyr)
+
+# all data will be loaded in the parent document and referenced within each of the child sections
+```
+
+### Twitter's `AnomalyDetection` Package
+Twitter's `AnomalyDetection` R package uses a Seasonal Hybrid ESD (S-H-ESD) which builds upon Rosner's Test (Generalized ESD) to determine outliers. Since Twitter built this algorithm to analyze their highly seasonal tweet data, the first step is a time series decomposition (see Figure \ref{fig:stl_explanation}).  Each time series is broken into it's seasonal and trend components with a remainder being the vertical distance between the expected value ($seasonal + trend$) and the original data.
+
+\begin{figure}[h!]
+\centering
+  \includegraphics[width=1\textwidth]{images/STL_explanation.png}
+\caption{Time series decomposition}
+\label{fig:stl_explanation}
+\end{figure}
+
+The remainder can best be visualized by comparing the actuals to the expected values (see Figure \ref{fig:actual_vs_expected_example}). Here, whenever the red and blue lines aren't overlapping, we have a remainder which can be positive or negative. *Note that this is not the data from the prior example.*
+
+\begin{figure}[h!]
+\centering
+  \includegraphics[width=0.7\textwidth]{images/actual_vs_expected.png}
+\caption{Visualizing the remainder}
+\label{fig:actual_vs_expected_example}
+\end{figure}
+
+Rosner's test is then run on the remainders which envolves testing the significance of the test statistic (Equation \ref{eq:rosners_test_statistic}) starting at the values furthest from the mean. This means that if the furthest from the mean is not significant (not considered an outlier), the series has no outliers and the algorithm stops.
+
+To use this test effectively, your data should be roughly normal, and you should have at least 25 observations. For this case study, we will use 95% statistical significance and limit maximum outliers that can be detected in each time series to 1; this doesn't mean it will always flag one, but rather, that we can't have more than 1. Note that the Twitter algorithm requires you to provide a period to determine seasonality; we will look at forcing a 7-day period and picking a custom period for that combo using a Fourier transform to calculate the strongest seasonality signal.[^8]
+
+\begin{equation}
+\centering
+  \includegraphics[width=0.35\textwidth]{images/Rosner_test_statistic.png}
+\label{eq:rosners_test_statistic}
+\end{equation}
+
+This method was developed to work specifically with Twitter's data, however, they themselves acknowledge that since anomaly detection techniques are built around a specific domain, they can rarely be used as-is in other fields.[^9] Furthermore, while this is quick for us to implement, we would be better off with a solution customized to our data.
+
+[^8]: [Detecting Seasonality using Fourier Transform in R](https://anomaly.io/detect-seasonality-using-fourier-transform-r/)
+[^9]: [Introducing practical and robust anomaly detection in a time series](https://blog.twitter.com/engineering/en_us/a/2015/introducing-practical-and-robust-anomaly-detection-in-a-time-series.html)
+
+#### Results
+Quite counterintuitively, our data doesn't have a single strong seasonality signal. We have many competing seasonality signals, so this algorithm isn't able to capture seasonality in the way we think of it. Our data quickly finds new normals that buck the seasonality trend: we get incremental budget, the client increases bids for a flash sale, a high-traffic tag gets removed from a few pages of the site, etc. These are all times when our performance changes, and we stay at a new level for a while, making it difficult to determine the true seasonality. Site events data is a little better, but we have multiple levels of seasonality: weekly, monthly, yearly, etc. Despite our lack of a strong seasonality signal, forcing the 7-day period actually performs similar to the custom period, because it is most likely one of the seasonality signals for that time series, although perhaps, not the strongest. The territory RexT data, being highly aggregated, behaves better with the seasonality used in the Twitter model.
+
+```{r twitter-flag-alerts, echo=FALSE, eval = FALSE}
+# find alerts using custom period and using weekly period
+twitter_custom_period_AS_results <- twitter_anomaly_detection_AS(AS_data)
+twitter_fixed_period_AS_results <- twitter_anomaly_detection_AS(AS_data, period = 7)
+
+twitter_custom_period_TS_results <- twitter_anomaly_detection_TS(TS_data)
+twitter_fixed_period_TS_results <- twitter_anomaly_detection_TS(TS_data, period = 7)
+
+twitter_custom_period_RexT_results <- twitter_anomaly_detection_RexT(RexT_data)
+twitter_fixed_period_RexT_results <- twitter_anomaly_detection_RexT(RexT_data, period = 7)
+
+# calculate tables
+twitter_custom_period_AS_counts <- AS_alert_counts(twitter_custom_period_AS_results %>% 
+                                                     dplyr::filter(run_date == AS_TS_beginning_date), 
+                                                   twitter_custom_period_AS_results %>% 
+                                                     dplyr::filter(run_date == AS_TS_middle_date), 
+                                                   twitter_custom_period_AS_results %>% 
+                                                     dplyr::filter(run_date == AS_TS_end_date))
+twitter_custom_period_AS_metric_counts <- AS_alert_counts_by_metric(twitter_custom_period_AS_results %>%
+                                                                      dplyr::filter(run_date == AS_TS_beginning_date), 
+                                                                    twitter_custom_period_AS_results %>%
+                                                                      dplyr::filter(run_date == AS_TS_middle_date), 
+                                                                    twitter_custom_period_AS_results %>%
+                                                                      dplyr::filter(run_date == AS_TS_end_date))
+
+twitter_fixed_period_AS_counts <- AS_alert_counts(twitter_fixed_period_AS_results %>% 
+                                                    dplyr::filter(run_date == AS_TS_beginning_date), 
+                                                   twitter_fixed_period_AS_results %>% 
+                                                    dplyr::filter(run_date == AS_TS_middle_date), 
+                                                   twitter_fixed_period_AS_results %>% 
+                                                    dplyr::filter(run_date == AS_TS_end_date))
+twitter_fixed_period_AS_metric_counts <- AS_alert_counts_by_metric(twitter_fixed_period_AS_results %>%
+                                                                     dplyr::filter(run_date == AS_TS_beginning_date), 
+                                                                    twitter_fixed_period_AS_results %>%
+                                                                     dplyr::filter(run_date == AS_TS_middle_date), 
+                                                                    twitter_fixed_period_AS_results %>%
+                                                                     dplyr::filter(run_date == AS_TS_end_date))
+
+twitter_custom_period_TS_counts <- TS_alert_counts(twitter_custom_period_TS_results %>% 
+                                                     dplyr::filter(run_date == AS_TS_beginning_date), 
+                                                   twitter_custom_period_TS_results %>% 
+                                                     dplyr::filter(run_date == AS_TS_middle_date), 
+                                                   twitter_custom_period_TS_results %>% 
+                                                     dplyr::filter(run_date == AS_TS_end_date))
+twitter_custom_period_TS_metric_counts <- TS_alert_counts_by_metric(twitter_custom_period_TS_results %>%
+                                                                      dplyr::filter(run_date == AS_TS_beginning_date), 
+                                                                    twitter_custom_period_TS_results %>%
+                                                                      dplyr::filter(run_date == AS_TS_middle_date), 
+                                                                    twitter_custom_period_TS_results %>%
+                                                                      dplyr::filter(run_date == AS_TS_end_date))
+
+twitter_fixed_period_TS_counts <- TS_alert_counts(twitter_fixed_period_TS_results %>% 
+                                                    dplyr::filter(run_date == AS_TS_beginning_date), 
+                                                  twitter_fixed_period_TS_results %>% 
+                                                    dplyr::filter(run_date == AS_TS_middle_date), 
+                                                  twitter_fixed_period_TS_results %>% 
+                                                    dplyr::filter(run_date == AS_TS_end_date))
+twitter_fixed_period_TS_metric_counts <- TS_alert_counts_by_metric(twitter_fixed_period_TS_results %>%
+                                                                     dplyr::filter(run_date == AS_TS_beginning_date), 
+                                                                    twitter_fixed_period_TS_results %>%
+                                                                     dplyr::filter(run_date == AS_TS_middle_date), 
+                                                                    twitter_fixed_period_TS_results %>%
+                                                                     dplyr::filter(run_date == AS_TS_end_date))
+
+twitter_custom_period_exec_counts <- exec_alert_counts(twitter_custom_period_RexT_results, 
+                                                       beginning_dates = exec_beginning_dates, 
+                                                       middle_dates = exec_middle_dates, 
+                                                       end_dates = exec_end_dates)
+twitter_custom_period_exec_territory_counts <- exec_alert_counts_by_territory(twitter_custom_period_RexT_results,
+                                                                              beginning_dates = exec_beginning_dates, 
+                                                                              middle_dates = exec_middle_dates,
+                                                                              end_dates = exec_end_dates)
+twitter_fixed_period_exec_counts <- exec_alert_counts(twitter_fixed_period_RexT_results, 
+                                                      beginning_dates = exec_beginning_dates, 
+                                                      middle_dates = exec_middle_dates, 
+                                                      end_dates = exec_end_dates)
+twitter_fixed_period_exec_territory_counts <- exec_alert_counts_by_territory(twitter_fixed_period_RexT_results,
+                                                                             beginning_dates = exec_beginning_dates, 
+                                                                             middle_dates = exec_middle_dates, 
+                                                                             end_dates = exec_end_dates)
+
+# save data
+save(twitter_custom_period_AS_results, twitter_custom_period_AS_counts, twitter_custom_period_AS_metric_counts,
+     twitter_fixed_period_AS_results, twitter_fixed_period_AS_counts, twitter_fixed_period_AS_metric_counts,
+     twitter_custom_period_TS_results, twitter_custom_period_TS_counts, twitter_custom_period_TS_metric_counts,
+     twitter_fixed_period_TS_results, twitter_fixed_period_TS_counts, twitter_fixed_period_TS_metric_counts,
+     twitter_custom_period_RexT_results, twitter_custom_period_exec_counts, twitter_custom_period_exec_territory_counts,
+     twitter_fixed_period_RexT_results, twitter_fixed_period_exec_counts, twitter_fixed_period_exec_territory_counts,
+     file = params$twitter_results_file)
+```
+
+```{r load-twitter-flagged-alerts, echo=FALSE}
+load(params$twitter_results_file)
+```
+
+##### AS Results
+```{r twitter-AS-method-disagreements, echo=FALSE}
+disagreed_twitter_AS <- dplyr::setdiff(twitter_custom_period_AS_results, 
+                                       twitter_fixed_period_AS_results)
+
+# count what didn't flag that the other did
+twitter_AS_not_flagged_by_custom <- disagreed_twitter_AS %>% 
+  dplyr::filter(!is_alert) %>% 
+  nrow()
+twitter_AS_not_flagged_by_fixed <- nrow(disagreed_twitter_AS) - twitter_AS_not_flagged_by_custom
+
+# calculate confusion matrices for each on this difference
+twitter_AS_conf_mat_custom_vs_fixed <- AS_overall_confusion_matrix(disagreed_twitter_AS %>% 
+                                                                     dplyr::filter(run_date %in% as.Date(AS_TS_beginning_date)), 
+                                                                   disagreed_twitter_AS %>% 
+                                                                     dplyr::filter(run_date %in% as.Date(AS_TS_middle_date)), 
+                                                                   disagreed_twitter_AS %>% 
+                                                                     dplyr::filter(run_date %in% as.Date(AS_TS_end_date)), logs)
+twitter_AS_conf_mat_fixed_vs_custom <- AS_overall_confusion_matrix(disagreed_twitter_AS %>% 
+                                                                     dplyr::filter(run_date %in% as.Date(AS_TS_beginning_date)) %>% mutate(is_alert = !is_alert), 
+                                                                   disagreed_twitter_AS %>% 
+                                                                     dplyr::filter(run_date %in% as.Date(AS_TS_middle_date)) %>% mutate(is_alert = !is_alert), 
+                                                                   disagreed_twitter_AS %>% 
+                                                                     dplyr::filter(run_date %in% as.Date(AS_TS_end_date)) %>% mutate(is_alert = !is_alert), logs)
+```
+
+The 7-day and custom periods disagree on `r nrow(disagreed_twitter_AS)` out of `r scopeR::format_number(nrow(twitter_custom_period_AS_results), digits = 0)` series (`r scopeR::format_percent(nrow(disagreed_twitter_AS)/nrow(twitter_custom_period_AS_results), digits = 0)`). The fixed day period flagged `r twitter_AS_not_flagged_by_custom` that weren't flagged by the custom period; the custom period flagged `r twitter_AS_not_flagged_by_fixed` series that the 7-day period didn't flag. (Keep in mind that we don't have data from `Metis` for every time series, so we will have more disagreements than data in our table when we match to what `Metis` has collected.)
+
+Among the disagreements, when we look into what was predicted by the custom period, we have nearly equal true and false positives and we are triggering more negatives than positives. Our `precision`, `recall`, and `F1-score` are mediocre. `Specificity` and `accuracy` are dreadful (see Table \ref{tabs:twitter_AS_confusion_matrix_on_set_difference_custom}).
+```{r twitter_AS_confusion_matrix_on_set_difference_custom, echo=FALSE}
+kable(twitter_AS_conf_mat_custom_vs_fixed, 
+      row.names = FALSE, digits = 2, format.args = list(big.mark = ","), 
+      caption = "\\label{tabs:twitter_AS_confusion_matrix_on_set_difference_custom}Prediction vs. Metis for AS alerts where custom and 7-day period disagreed, taking custom period")
+```
+
+If we take the side of the 7-day period as in Table \ref{tabs:twitter_AS_confusion_matrix_on_set_difference_fixed}, our `precision` and `recall` improve quite a bit---our `F1-score` improves as a consequence. `Specificity` and `accuracy` are better, but still something we should stay far away from. We have flipped everything here, so now we have a roughly even amount of true negatives and false negatives with more things marked positive in general; this begs the question---what is more important to us: minimizing false positives or false negatives?
+```{r twitter_AS_confusion_matrix_on_set_difference_fixed, echo=FALSE}
+kable(twitter_AS_conf_mat_fixed_vs_custom, 
+      row.names = FALSE, digits = 2, format.args = list(big.mark = ","), 
+      caption = "\\label{tabs:twitter_AS_confusion_matrix_on_set_difference_fixed}Prediction vs. Metis for AS alerts where custom and 7-day period disagreed, taking 7-day period")
+```
+
+For the AS metrics using the custom period, we have way more alerts for the beginning and end of the month compared to the middle of the month (see Figure \ref{fig:twitter_custom_AS_results_graphs}). This model doesn't seem to understand seasonality like we do; even with a period custom to that time series, we aren't capturing the true nature of beginning/end of month being expectably more volatile. We are flagging more spend-related metrics beginning of month (spend, RexT---local and Euro); end of month we are flagging more conversion-related metrics (conversions, order value). 
+
+```{r twitter_custom_AS_results_graphs, fig.cap="\\label{fig:twitter_custom_AS_results_graphs}AS alert counts using Twitter AnomalyDetection and Custom Period", fig.width=9, fig.height=6.5, echo=FALSE}
+arrange_AS_alert_count_graphs(overall_results_count = twitter_custom_period_AS_counts, 
+                              metrics_count = twitter_custom_period_AS_metric_counts)
+```
+
+At the campaign-level, we have more alerts during the beginning/end of the month for each metric except COS and conversions (which peaks at the beginning of the month) compared to the middle of the month, but we also have many more clicks alerts for the beginning of the month. The model seems to have a different understanding of behavior at the client- vs. campaign-level. There is also a huge uptick in alerts on display volume. For most clients with alerts, we are triggering just 1 alert; the same is true for campaign alerts. Unlike the percent change methods, we see that our campaign alerts per client is, thankfully, well under 200. 
+
+Overall, the custom period has good `precision`, but the abysmal `recall` leads to an un-useable `F1-score`. With the custom period, our best metric by `F1-score` (TAC) is still below 0.5. We are looking to get near 1, so it's clear this is not going to work for these metrics. See Table \ref{tabs:twitter_as_results_metis_comparison_overall_custom_period} for breakdown.
+```{r twitter_as_results_metis_comparison_overall_custom_period, echo = FALSE}
+# perhaps it makes sense to display the confusion matrix here instead
+twitter_custom_AS_comparison <- AS_overall_confusion_matrix(twitter_custom_period_AS_results %>% 
+                                                              dplyr::filter(run_date %in% as.Date(AS_TS_beginning_date)), 
+                                                            twitter_custom_period_AS_results %>% 
+                                                              dplyr::filter(run_date %in% as.Date(AS_TS_middle_date)), 
+                                                            twitter_custom_period_AS_results %>% 
+                                                              dplyr::filter(run_date %in% as.Date(AS_TS_end_date)),
+                                                            logs)
+kable(twitter_custom_AS_comparison, 
+      digits = 2, format.args = list(big.mark = ","), 
+      caption = "\\label{tabs:twitter_as_results_metis_comparison_overall_custom_period}Prediction vs. Metis for AS alerts using Twitter AnomalyDetection with Custom Period")
+```
+
+```{r twitter-as-results-metis-comparison-metric-custom-period, echo = FALSE}
+# perhaps it makes sense to display the confusion matrix here instead
+twitter_custom_AS_metrics_comparision <- AS_metrics_confusion_matrix(twitter_custom_period_AS_results %>%
+                                                                       dplyr::filter(run_date %in% as.Date(AS_TS_beginning_date)), 
+                                                                     twitter_custom_period_AS_results %>%
+                                                                       dplyr::filter(run_date %in% as.Date(AS_TS_middle_date)), 
+                                                                     twitter_custom_period_AS_results %>%
+                                                                       dplyr::filter(run_date %in% as.Date(AS_TS_end_date)), 
+                                                                     logs)
+kable(twitter_custom_AS_metrics_comparision %>% 
+        dplyr::filter(as.character(Metric) != "**Total**") %>% 
+        dplyr::arrange(as.character(Metric)), 
+      row.names = FALSE, digits = 2, format.args = list(big.mark = ","))
+```
+
+Using the fixed 7-day period with the AS data gives us more alerts across the board and larger variation in alert counts (see Figure \ref{fig:twitter_fixed_AS_results_graphs}). Here, we see the same pattern with spend metric alerts, although we now see similar alert levels on conversion-related metrics for beginning and end of month (conversions, CR), but we have replaced order value with CR. With the 7-day period at the campaign-level, we continue to see clicks jump out, but now we see that CR is triggered way more at the end of the month (more pronounced than with the custom period). We trigger slightly more campaign alerts per client with the fixed period; however, the overall distribution is pretty equivalent. We also get a slight improvement in `precision`, but unfortunately none in `recall` or `F1-score` (see Table \ref{tabs:twitter_as_results_metis_comparison_overall_fixed_period}).  Our performance using `F1-score` is slightly more averaged for all metrics, however, it evens out to the same overall `F1-score` as the custom period---we just have less bad and less good `F1-score`'s for the metrics.
+
+
+```{r twitter_as_results_metis_comparison_overall_fixed_period, echo = FALSE}
+# perhaps it makes sense to display the confusion matrix here instead
+twitter_fixed_AS_comparison <- AS_overall_confusion_matrix(twitter_fixed_period_AS_results %>% 
+                                                             dplyr::filter(run_date %in% as.Date(AS_TS_beginning_date)),
+                                                           twitter_fixed_period_AS_results %>% 
+                                                             dplyr::filter(run_date %in% as.Date(AS_TS_middle_date)), 
+                                                           twitter_fixed_period_AS_results %>% 
+                                                             dplyr::filter(run_date %in% as.Date(AS_TS_end_date)), logs)
+kable(twitter_fixed_AS_comparison, 
+      digits = 2, format.args = list(big.mark = ","), 
+      caption = "\\label{tabs:twitter_as_results_metis_comparison_overall_fixed_period}Prediction vs. Metis for AS alerts using Twitter AnomalyDetection with Fixed 7-day Period")
+```
+
+```{r twitter-as-results-metis-comparison-metric-fixed-period, echo = FALSE}
+# perhaps it makes sense to display the confusion matrix here instead
+twitter_fixed_AS_metrics_comparision <- AS_metrics_confusion_matrix(twitter_fixed_period_AS_results %>%
+                                                                      dplyr::filter(run_date %in% as.Date(AS_TS_beginning_date)), 
+                                                                    twitter_fixed_period_AS_results %>%
+                                                                      dplyr::filter(run_date %in% as.Date(AS_TS_middle_date)), 
+                                                                    twitter_fixed_period_AS_results %>%
+                                                                      dplyr::filter(run_date %in% as.Date(AS_TS_end_date)), 
+                                                                    logs)
+kable(twitter_fixed_AS_metrics_comparision %>%  
+        dplyr::filter(as.character(Metric) != "**Total**") %>% 
+        dplyr::arrange(as.character(Metric)), 
+      row.names = FALSE, digits = 2, format.args = list(big.mark = ","))
+```
+
+
+```{r twitter_fixed_AS_results_graphs, fig.cap="\\label{fig:twitter_fixed_AS_results_graphs}AS alert counts using Twitter AnomalyDetection and Fixed 7-day Period", fig.width=9, fig.height=7, echo=FALSE}
+arrange_AS_alert_count_graphs(overall_results_count = twitter_fixed_period_AS_counts, 
+                              metrics_count = twitter_fixed_period_AS_metric_counts)
+```
+
+##### TS Results
+Both the custom period and the fixed 7-day period versions of model yield the same results, so I will only walk through one set this time, but know that they are the same. This is most likely due to the highly seasonal nature of the TS alerts. Many have multiple seasonal trends (7D, 14D, 21D, 30D, 60D, etc.), so forcing it to be 7D, while it might not be the strongest of the seasonal signals, it is still a good estimate of the true period, meaning that this assumption doesn't harm our results.
+```{r check-if-twitter-ts-are-equal, echo=FALSE, eval=FALSE}
+dplyr::setequal(twitter_fixed_period_TS_results, twitter_custom_period_TS_results)
+```
+
+We have many more alerts for beginning and end of month, especially, when we look at the tag level. Even though we are taking into account seasonality, this model doesn't seem to recognize that middle of the month tends to behave differently than beginning/end of month. Alerts are spread pretty evenly across event name. However, we see double the amount of desktop `site_type` alerts at the end of the month compared to the other time periods. Not sure why this could be, but interesting to note, nevertheless. Using the boxplots in Figure \ref{fig:twitter_TS_results_graphs}, we see that for nearly every alert count breakout listed, we have a median of one alert triggered; the only exception is the tablet tag. This means that the Twitter model tends to only trigger 1 alert per event name and 1 alert per site type, unlike what we saw for the percent change methods.
+
+```{r twitter_TS_results_graphs, fig.cap="\\label{fig:twitter_TS_results_graphs}TS alert counts using Twitter AnomalyDetection", fig.width=9, fig.height=7, echo=FALSE}
+arrange_TS_alert_count_graphs(overall_results_count = twitter_fixed_period_TS_counts, 
+                              metrics_count = twitter_fixed_period_TS_metric_counts)
+```
+
+Our `F1-score` is horrible for TS metrics as evidenced in Table \ref{tabs:twitter_ts_results_metis_comparison_overall_fixed}. Even though both the custom and fixed periods agreed on everything, neither agreed with the `SCOPE` userbase. We have poor `precision` and `recall`, to boot, with our worst performance at the middle of the month. While our best performance is at the site level, we have low `F1-score`'s across the board at the `event_name` level. Things are pretty awful at the `site_type` level as well. Site-level is again one of the better performers; this leads me to believe that this model is yet another one that is better on aggregated data.
+```{r twitter_ts_results_metis_comparison_overall_fixed, echo = FALSE}
+# perhaps it makes sense to display the confusion matrix here instead
+twitter_TS_comparison_fixed <- TS_overall_confusion_matrix(twitter_fixed_period_TS_results %>% 
+                                                             dplyr::filter(run_date %in% as.Date(AS_TS_beginning_date)),
+                                                           twitter_fixed_period_TS_results %>% 
+                                                             dplyr::filter(run_date %in% as.Date(AS_TS_middle_date)), 
+                                                           twitter_fixed_period_TS_results %>% 
+                                                             dplyr::filter(run_date %in% as.Date(AS_TS_end_date)), logs)
+kable(twitter_TS_comparison_fixed, 
+      digits = 2, format.args = list(big.mark = ","), 
+      caption = "\\label{tabs:twitter_ts_results_metis_comparison_overall_fixed}Prediction vs. Metis for TS alerts using Twitter AnomalyDetection with Fixed 7-day Period")
+```
+
+```{r twitter-ts-results-metis-comparison-tag-event-fixed, echo = FALSE}
+# perhaps it makes sense to display the confusion matrix here instead
+twitter_TS_metrics_comparision_fixed <- TS_metrics_confusion_matrix(twitter_fixed_period_TS_results %>% 
+                                                                      dplyr::filter(run_date %in% as.Date(AS_TS_beginning_date)), 
+                                                                    twitter_fixed_period_TS_results %>% 
+                                                                      dplyr::filter(run_date %in% as.Date(AS_TS_middle_date)), 
+                                                                    twitter_fixed_period_TS_results %>% 
+                                                                      dplyr::filter(run_date %in% as.Date(AS_TS_end_date)), 
+                                                                    logs)
+kable(twitter_TS_metrics_comparision_fixed$event_name %>% 
+        dplyr::filter(as.character(Metric) != "**TOTAL**") %>% 
+        dplyr::arrange(as.character(Metric)), 
+      row.names = FALSE, digits = 2, format.args = list(big.mark = ","))
+```
+
+```{r twitter-ts-results-metis-comparison-tag-site-type-fixed, echo = FALSE}
+# perhaps it makes sense to display the confusion matrix here instead
+kable(twitter_TS_metrics_comparision_fixed$site_type %>% 
+        dplyr::filter(as.character(Metric) != "**Total**") %>% 
+        dplyr::arrange(as.character(Metric)), 
+      row.names = FALSE, digits = 2, format.args = list(big.mark = ","))
+```
+
+##### Territory RexT Results
+```{r twitter-RexT-method-disagreements, echo=FALSE}
+disagreed_twitter_RexT <- dplyr::setdiff(twitter_custom_period_RexT_results, 
+                                         twitter_fixed_period_RexT_results)
+
+# count what didn't flag that the other did
+twitter_RexT_not_flagged_by_custom <- disagreed_twitter_RexT %>% 
+  dplyr::filter(!is_alert) %>% 
+  nrow()
+twitter_RexT_not_flagged_by_fixed <- nrow(disagreed_twitter_RexT) - twitter_RexT_not_flagged_by_custom
+
+# calculate confusion matrices for each on this difference
+twitter_RexT_conf_mat_custom_vs_fixed <- exec_overall_confusion_matrix(disagreed_twitter_RexT, 
+                                                                       logs, 
+                                                                       beginning_dates = exec_beginning_dates, 
+                                                                       middle_dates = exec_middle_dates, 
+                                                                       end_dates = exec_end_dates)
+twitter_RexT_conf_mat_fixed_vs_custom <- exec_overall_confusion_matrix(disagreed_twitter_RexT %>% 
+                                                                         mutate(is_alert = !is_alert), 
+                                                                       logs, 
+                                                                       beginning_dates = exec_beginning_dates,
+                                                                       middle_dates = exec_middle_dates, 
+                                                                       end_dates = exec_end_dates)
+```
+
+The 7-day and custom periods disagree on `r nrow(disagreed_twitter_RexT)` out of `r scopeR::format_number(nrow(twitter_custom_period_RexT_results), digits = 0)` series (`r scopeR::format_percent(nrow(disagreed_twitter_RexT)/nrow(twitter_custom_period_RexT_results), digits = 0)`). The fixed day period flagged `r twitter_RexT_not_flagged_by_custom` that weren't flagged by the custom period; the custom period flagged `r twitter_RexT_not_flagged_by_fixed` series that the 7-day period didn't flag.
+
+The confusion matrix metrics for using the custom period classification on series where the 7-day period and the custom period disagreed on whether it was an alert or not are all pretty low. See Table \ref{tabs:twitter_RexT_confusion_matrix_on_set_difference_custom} for the breakdown.
+```{r twitter_RexT_confusion_matrix_on_set_difference_custom, echo=FALSE}
+kable(twitter_RexT_conf_mat_custom_vs_fixed, 
+      row.names = FALSE, digits = 2, 
+      caption = "\\label{tabs:twitter_RexT_confusion_matrix_on_set_difference_custom}Prediction vs. Metis for territory RexT alerts where methods disagreed, taking custom period")
+```
+
+Taking the 7-day period (in Table \ref{tabs:twitter_RexT_confusion_matrix_on_set_difference_fixed}), the `F1-score` is **much** higher but our `precision`, `specificity`, and `accuracy` are still low. (We flipped the metrics we were looking at when you used the custom period's classifications.) It is clear that by choosing either one over the other that we aren't getting to an optimal, but we are catching more true positives and less false negatives when we use the 7-day period; we just have to deal with the uptick in false positives. This once again brings up the question---what is more important to us: minimizing false positives or false negatives?
+```{r twitter_RexT_confusion_matrix_on_set_difference_fixed, echo=FALSE}
+kable(twitter_RexT_conf_mat_fixed_vs_custom, 
+      row.names = FALSE, digits = 2,
+      caption = "\\label{tabs:twitter_RexT_confusion_matrix_on_set_difference_fixed}Prediction vs. Metis for territory RexT alerts where methods disagreed, taking 7-day period")
+```
+
+Even though we are using seasonality, it seems that with a custom period, we are flagging more alerts on the beginning and end of the month. Using custom period seems to ignore the relationship between the most aggregated series and its component series. For example, since US is such a large portion of North America, we would expect any alerts on the US to have a corresponding alert in North America and vice versa. Other than that, there is no real pattern here. Additionally, Figure \ref{fig:twitter_custom_RexT_results_graphs} shows us that we have the largest variation in the middle of the month with North America regions (North America, US, Canada) while LATAM (LATAM, Brazil, Argentina, Chile, Colombia, Mexico, and SAM Other) is the most variant overall---makes sense because they have smaller and more volatile regions. 
+```{r twitter_custom_RexT_results_graphs, fig.cap="\\label{fig:twitter_custom_RexT_results_graphs}RexT alert counts using Twitter AnomalyDetection with Custom Period", fig.width=9, fig.height=4.75, echo=FALSE}
+arrange_RexT_alert_count_graphs(twitter_custom_period_exec_counts, 
+                                twitter_custom_period_exec_territory_counts)
+```
+
+With the custom period (results in Table \ref{tabs:twitter_exec_results_metis_comparison_overall_custom}), our `precision` is very high, however our low `recall` gives us a low `F1-score`. `Precision` is perfect for some of the regions when using the custom period, however, very few of those also have good `recall` meaning our `F1-score` is run-of-the-mill.
+```{r twitter_exec_results_metis_comparison_overall_custom, echo = FALSE}
+# perhaps it makes sense to display the confusion matrix here instead
+twitter_exec_comparison_custom <- exec_overall_confusion_matrix(twitter_custom_period_RexT_results, 
+                                                                logs, 
+                                                                beginning_dates = exec_beginning_dates, 
+                                                                middle_dates = exec_middle_dates, 
+                                                                end_dates = exec_end_dates)
+kable(twitter_exec_comparison_custom, 
+      row.names = FALSE, digits = 2, 
+      caption = "\\label{tabs:twitter_exec_results_metis_comparison_overall_custom}Prediction vs. Metis for territory RexT alerts using Twitter AnomalyDetection with Custom Period")
+```
+
+```{r twitter-exec-results-metis-comparison-by-territory-custom, echo = FALSE}
+# perhaps it makes sense to display the confusion matrix here instead
+twitter_exec_territory_comparison_custom <- exec_territories_confusion_matrix(twitter_custom_period_RexT_results, 
+                                                                              logs)
+kable(twitter_exec_territory_comparison_custom %>% 
+        dplyr::filter(as.character(Territory) != "**Total**"), 
+      row.names = FALSE, digits = 2)
+```
+
+When we look at the fixed period, we actually have more alerts during the middle of month! Here, we seem to have a better correlation between US - North America - Americas alerts, and we have more alerts spread out among the territories. Using the boxplot in Figure \ref{fig:twitter_fixed_RexT_results_graphs}, we can observe that the fixed period has more variation overall in the number of alerts across the territories compared to the custom period. We now have variation in the Americas and LATAM regions for all dates looked at, but North America has gotten less variant (all the component regions were triggered the same number of times over the same date ranges). 
+```{r twitter_fixed_RexT_results_graphs, fig.cap="\\label{fig:twitter_fixed_RexT_results_graphs}RexT alert counts using Twitter AnomalyDetection with Fixed 7-day Period", fig.width=9, fig.height=5, echo=FALSE}
+arrange_RexT_alert_count_graphs(twitter_fixed_period_exec_counts, 
+                                twitter_fixed_period_exec_territory_counts)
+```
+
+As seen in Table \ref{tabs:twitter_exec_results_metis_comparison_overall_fixed}, we have a higher amount of false positives (and model positives overall) with the fixed period, however, our `F1-score` is slightly better than with the custom period since we improved our `recall` while not lowering our `precision` too much. `Accuracy` and `specificity` are the same for both period methods. Using the 7-day fixed period, we have even more regions with perfect `precision` *and* our `recall` is better; we even have perfect `F1-score` for the US! It's clear that despite our intuition, the fixed-period performs better for region-level data.
+```{r twitter_exec_results_metis_comparison_overall_fixed, echo = FALSE}
+# perhaps it makes sense to display the confusion matrix here instead
+twitter_exec_comparison_fixed <- exec_overall_confusion_matrix(twitter_fixed_period_RexT_results, 
+                                                               logs, 
+                                                               beginning_dates = exec_beginning_dates, 
+                                                               middle_dates = exec_middle_dates, 
+                                                               end_dates = exec_end_dates)
+kable(twitter_exec_comparison_fixed, 
+      row.names = FALSE, digits = 2, 
+      caption = "\\label{tabs:twitter_exec_results_metis_comparison_overall_fixed}Prediction vs. Metis for territory RexT alerts using Twitter AnomalyDetection with Fixed Period")
+```
+
+```{r twitter-exec-results-metis-comparison-by-territory-fixed, echo = FALSE}
+# perhaps it makes sense to display the confusion matrix here instead
+twitter_exec_territory_comparison_fixed <- exec_territories_confusion_matrix(twitter_fixed_period_RexT_results, 
+                                                                             logs)
+kable(twitter_exec_territory_comparison_fixed %>% 
+        dplyr::filter(as.character(Territory) != "**Total**"), 
+      row.names = FALSE, digits = 2)
+```
+
+#### ROC Curve
+Since this model yields a `TRUE`/`FALSE` answer to whether a given point is an anomaly, we don't have a threshold we can alter and will provide the ROC "points" instead (Figure \ref{fig:twitter_roc_points_facet}). It is easy to see how we became less sensitive and more relevant by implementing this model after using percent change from the mean. 
+
+```{r twitter_roc_points_facet, fig.cap="\\label{fig:twitter_roc_points_facet}ROC curve by product using Twitter AnomalyDetection comparing custom and 7-day fixed periods", echo = FALSE, warning=FALSE, fig.height=3.5, fig.width=7}
+ROC_curve_points_facet(AS_data = rbind(rbind(twitter_custom_AS_comparison, 
+                                             twitter_custom_AS_metrics_comparision %>% 
+                                               rename(Date = Metric)) %>% 
+                                         mutate(facet = "Custom"),
+                                 rbind(twitter_fixed_AS_comparison, 
+                                       twitter_fixed_AS_metrics_comparision %>% 
+                                         rename(Date = Metric)) %>% 
+                                   mutate(facet = "Fixed")), 
+                       TS_data = rbind(rbind(twitter_TS_comparison_fixed,
+                                             twitter_TS_metrics_comparision_fixed$event_name %>% 
+                                               rename(Date = Metric), 
+                                             twitter_TS_metrics_comparision_fixed$site_type %>% 
+                                               rename(Date = Metric)) %>% 
+                                         mutate(facet = "Fixed"),
+                                       rbind(twitter_TS_comparison_fixed,
+                                             twitter_TS_metrics_comparision_fixed$event_name %>% 
+                                               rename(Date = Metric), 
+                                             twitter_TS_metrics_comparision_fixed$site_type %>% 
+                                               rename(Date = Metric)) %>% mutate(facet = "Custom")),  
+                       exec_data = rbind(rbind(twitter_exec_comparison_fixed, 
+                                               twitter_exec_territory_comparison_fixed %>% 
+                                                 rename(Date = Territory)) %>%
+                                           mutate(facet = "Fixed"),
+                                         rbind(twitter_exec_comparison_custom, 
+                                               twitter_exec_territory_comparison_custom %>% 
+                                                 rename(Date = Territory)) %>% 
+                                           mutate(facet = "Custom")),
+                       facet_column = "facet", 
+                       method_name = 'Twitter AnomalyDetection: 95% stat sig, 1 outlier max, fixed 7-day period vs. custom period')
+```
+
+Our false positive rate is well below the rate we chose when selecting our percent change threshold in the prior models. However, with the exception of the RexT alerts we don't seem to be doing much (if at all) better than the percent change models at the same false positive rate. This suggests that none of the models presented thus far (percent change variations or Twitter algorithm variations) are optimal for AS/TS alerts. Once again, we have a model that performs much better on the aggregated data. By taking seasonality into account, we have significantly improved our `precision`, however, our `recall` has suffered, and therefore, this model acheives a *lower* `F1-score` than the percent change models for AS and TS metrics. Somewhat surprisingly, we don't seem to gain anything by using the custom period for each time series. The 7-day seems to work the same for AS and TS and better for the RexT data. The extra calculation needed to determine the period for each series is costly, so it's good to know that it doesn't really make a difference, and we can use a fixed value instead.
+
+#### Alogrithm Complexity  
+While the custom period brings this to a 3rd-degree (!) polynomial, it's performance isn't really any better than using the fixed 7-day period (the two methods shared a very large overlap in alerts), so we would be doing ourselves a disservice to use the custom period. As such, we will go over the complexity of the fixed period. Rosner's test will stop searching once the current point we are evaluating turns out not to be an outlier, and since we are only allowing 1 outlier per time series, the algorithm will only check the most devious point; this means, per a specific client and KPI, we have a complexity of 1, so we just need to count the loops needed to get to that point.  Therefore, average complexity ($\Theta$) is:
+
+\begin{equation}
+\centering
+  \Theta(n) = (k * n)^2
+\label{eq:twitter_big_o}
+\end{equation}
+
+*where*:
+
+* *$n$ = number of series to inspect (i.e. total number of clients + total number of campaigns)*
+* *$k$ = number of KPIs to inspect (for each series)*
+
+This gives us an overall quadratic complexity ($\Theta(n^2)$) since $k$ should always be way less than $n$ as well as a tight best-case of $\Omega(n^2)$ and tight worst-case of $O(n^2)$. For small $n$, this won't be awful, but for large $n$, we will quickly eclipse algorithms of lower complexities. It behooves us to use a faster algorithm if we hope to expand `SCOPE`.
+
+#### Conclusions
+In switching from the percent change model to the Twitter algorithm, we reduced our false positives and improved our `precision`. However, since we went for a very low false positive rate, we ended up with poor `recall` (worse than percent change) for AS and TS metrics as we failed to flag the more minor alerts. Due to our lack of complete data when we implemented this---we only knew about true and false positives, but nothing about the negatives---we made the choice to reduce false positives, however, now that we have complete information, we are better off finding the balance between reducing false positives and false negatives; this is part of the reason we are using the `F1-score` as a main metric. Using the `F1-score`, the Twitter method is only better than percent change for territory RexT, where it improves the `precision` and the `F1-score`. We once again have an algorithm that performs best on our most aggregated data, but with a much higher algorithmic complexity that will led to significantly larger compute times when we increase our scope. 
+
+Furthermore, this model doesn't seem to understand seasonality like we do. In fact, when left to its own devices, it can't find a single strong seasonality signal. We have many possible signals that have similar strengths; I had to write an extra function to allow the use of a custom period (the strongest among the weak, if you will). This suggests that although our data is seasonal to us; it is, in fact, pretty random, especially when seen through the eyes of a machine. In particular, AS data is very difficult to get a strong seasonality signal out of due to fluctuations in performance and budgets being common over the 60 day period; TS often has several, but none being the dominant by far; territory RexT is not as erratic as the AS data, but it's still less obvious what the period is truely. The Twitter algorithm is designed for highly-seasonal, very granular data, seconds (or milliseconds) apart. We have granular data days apart, and this mismatch appears to be preventing this model from being helpful for us.
+
+Note that when this model was in use, it was thought to be way too sensitive, as well---although, a huge improvement over the percent change. Changing to this model was enough to convince AS team leaders that we could release `SCOPE` to their whole team and move off of the beta-testers. When we used this model, we were allowing more outliers to be present in the time series, so we were capturing local and global outliers (I'm not strictly calling them min or max because the data gets transformed, so it wasn't the min/max when looking at the graph of the series), whereas here, we just capture the global; we, thus, have many fewer alerts than we triggered using Twitter's `AnomalyDetection` package in production. Also, note that users often reported that this was too sensitive; however, when collecting data with `Metis`, I noticed that users were marking as alerts series that didn't seem too extreme (stuff they complained was being flagged because the model was too sensitive before); this begs the question: did users complain that the model was too sensitive because of the old email layout providing tons of information per alert or because the actual alert was irrelevant?

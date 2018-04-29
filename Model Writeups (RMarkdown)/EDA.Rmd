@@ -1,0 +1,197 @@
+---
+title: "Exploratory Data Analysis"
+author: "Stefanie Molin"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output: pdf_document
+---
+
+```{r eda-setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# load the case study library
+library(modelAnalyzeR)
+library(dplyr)
+
+# all data will be loaded in the parent document and referenced within each of the child sections
+```
+
+# Exploratory Data Analysis 
+Before we look into models, we should become more acquainted with our data and its intricacies. To do that, I will perform some exploratory data analysis (EDA) on the data for AS, TS, and RexT alerts (we don't need to find patterns in the logs), looking at the distributions of our data, correlation between metrics, the dispersion of the data, and seasonality. This will better inform future decisions as to what models to test and what parameters to tune and will also provide us with some insights into our data. Note that I will not be going over any summary statistics explicitly; while they are usually part of EDA, they are excluded here since the actual number values of those statistics don't matter for our purposes.
+
+```{r eda-summary-calculations, echo=FALSE, eval=FALSE}
+# summary stats
+AS_client_summary <- unmelt_AS(AS_data) %>% 
+  dplyr::filter(as.character(client_name) == as.character(series)) %>% 
+  dplyr::select(clicks, displays, conversions, spend, tac, client_rext, rext_euro, order_value, cos, ctr, cr, margin) %>% 
+  summary()
+
+AS_campaign_summary <- unmelt_AS(AS_data) %>% 
+  dplyr::filter(as.character(client_name) != as.character(series)) %>% 
+  dplyr::select(clicks, displays, conversions, spend, tac, client_rext, rext_euro, order_value, cos, ctr, cr, margin) %>% 
+  summary()
+
+TS_summary <- unmelt_TS(TS_data) %>% 
+  dplyr::select(site_events, tag_events) %>% 
+  summary()
+
+RexT_summary <- unmelt_RexT(RexT_data) %>% 
+  dplyr::select(ends_with("territory_rext")) %>% 
+  summary()
+
+# prepped data
+AS_EDA_data <- EDA_data_prep_AS(AS_data, beginning_dates = AS_TS_beginning_date, 
+                                middle_dates = AS_TS_middle_date, end_dates = AS_TS_end_date)
+TS_EDA_data <- EDA_data_prep_TS(TS_data, beginning_dates = AS_TS_beginning_date, 
+                                middle_dates = AS_TS_middle_date, end_dates = AS_TS_end_date)
+RexT_EDA_data <- EDA_data_prep_RexT(RexT_data, beginning_dates = exec_beginning_dates, 
+                                middle_dates = exec_middle_dates, end_dates = exec_end_dates)
+
+# unmelted data
+AS_EDA_unmelted <- AS_EDA_data$client_df %>% unmelt_AS()
+TS_arranged_data <- reshape_TS_data_for_EDA(TS_EDA_data)
+
+# qqplot data
+qqplot_data <- dplyr::filter(AS_EDA_data$client_df, kpi == "clicks")
+
+# violin plots by metric
+violin_plot_all_distributions <- cowplot::plot_grid(arrange_AS_violin_plots(AS_EDA_data$client_df), 
+                                                    arrange_TS_violin_plots(TS_EDA_data), 
+                                                    arrange_RexT_violin_plots(RexT_EDA_data), 
+                                                    ncol = 1, rel_heights = c(1, 0.8, 1))
+coefficient_of_variation_AS_plots <- coefficient_of_variation_violin_plots(AS_EDA_unmelted,
+                                                                           "series", 
+                                                                           metrics = c("client_rext", "margin", "rext_euro", "spend",
+                                                                                       "tac", "order_value", "cos", "cr", "ctr", "clicks",
+                                                                                       "conversions", "displays"),
+                                                                           last_index = 6,
+                                                                           preprocess = TRUE)
+coefficient_of_variation_TS_plots <- coefficient_of_variation_violin_plots(TS_arranged_data, 
+                                                                           "series", 
+                                                                           c("basket", "homepage", "listing", "product", "sales", "search", "SITE LEVEL", 
+                                                                             "aa", "aios", "d", "m", "t", "SITE LEVEL"), 
+                                                                           7)
+
+coefficient_of_variation_plots <- cowplot::plot_grid(
+  cowplot::plot_grid(coefficient_of_variation_violin_plots(AS_EDA_unmelted,
+                                                           "series", 
+                                                           metrics = c("client_rext", "margin", "rext_euro", "spend",
+                                                                       "tac"),
+                                                           last_index = NULL,
+                                                           preprocess = TRUE), 
+                     RexT_EDA_data %>% 
+                       mutate(metric = "Territory RexT") %>% 
+                       coefficient_of_variation_violin_plots("series", 
+                                                             c("ARGENTINA", "BRAZIL", "CANADA", "CHILE", "COLOMBIA", 
+                                                               "MEXICO", "SAM OTHER", "US", "NORTH AMERICA", "LATAM", "AMERICAS")) +
+                       ggplot2::labs(x = "", y = "", caption = "") + 
+                       ggplot2::scale_y_continuous(labels = scales::percent, limits = c(0, 1)),
+                     ncol = 2, rel_widths = c(1, 0.2)), 
+  coefficient_of_variation_violin_plots(AS_EDA_unmelted,
+                                        "series", 
+                                        metrics = c("cos", "cr", "ctr", "clicks", "conversions", "displays"),
+                                        last_index = NULL,
+                                        preprocess = TRUE),
+  coefficient_of_variation_TS_plots,
+  ncol = 1, rel_heights = c(1, 1, 2))
+
+seasonality_plots <- seasonality_violin_plots(AS_EDA_data$client_df, TS_arranged_data, RexT_EDA_data)
+
+correlation_data_for_EDA <- metrics_correlation_data(AS_data = AS_EDA_unmelted,
+                                                     TS_data = TS_arranged_data,
+                                                     RexT_data = RexT_EDA_data)
+
+# save variables for later, but not to load into paper
+save(AS_client_summary, AS_campaign_summary, TS_summary, RexT_summary, 
+     AS_EDA_data, TS_EDA_data, RexT_EDA_data, 
+     AS_EDA_unmelted, TS_arranged_data,
+     file = "data/EDA_extra_data.Rdata")
+# load("data/EDA_extra_data.Rdata")
+
+# save stuff for paper
+save(qqplot_data, violin_plot_all_distributions,
+     coefficient_of_variation_AS_plots,
+     coefficient_of_variation_TS_plots, 
+     coefficient_of_variation_plots,
+     seasonality_plots, correlation_data_for_EDA,
+     file = params$eda_data)
+```
+
+```{r eda-summary-load, echo=FALSE}
+load(params$eda_data)
+```
+
+#### Distributions
+Many statistical techniques require that the data you use it on have a certain underlying distribution, most often the normal. While many things are close to a normal, it makes sense to verify this assumption before moving forward with one of those such methods. Enter Quantile-Quantile plots (Q-Q plot for short). A Q-Q plot allows us to visually inspect if our data comes from a specific distribution and how well it matches up to that distribution. This is done by plotting the quantiles of the data (sample quantiles) against the quantiles drawn from the distribution to test (theoretical quantiles). A perfectly diagonal line would mean it is very likely from that distribution. Diagonal lines that are curved at the ends would indicate that the data has more extreme values than would be expected. Lastly, curves that are not close to diagonal lines indicate that the distribution is skewed (slight curve) or the data is most likely from a different distribution (no longer close to linear).[^7] 
+
+[^7]: [Understanding Q-Q Plots](http://data.library.virginia.edu/understanding-q-q-plots/)
+
+In Figure \ref{fig:EDA_QQ_plots}, I included 2 Q-Q plots comparing the distribution of one of our metrics to the normal and to a Chi-square with 1 degree of freedom. It's pretty obvious that the distribution is not normal and closer to that of the Chi-square; the Chi-square Q-Q plot is curved at the ends meaning we have more extreme values than would be in the distribution---our anomalies.
+
+```{r EDA_QQ_plots, fig.cap="\\label{fig:EDA_QQ_plots}Sample quantile-quantile plots using normal and Chi-square distributions", fig.width=7, fig.height=2.5, echo=FALSE}
+cowplot::plot_grid(ggplot2::ggplot(qqplot_data, aes(sample = value)) +
+                     ggplot2::stat_qq() + 
+                     ggplot2::ggtitle("Normal Q-Q Plot") + 
+                     case_study_theme(),
+                   ggplot2::ggplot(qqplot_data, aes(sample = value)) +
+                     ggplot2::stat_qq(distribution = qchisq, dparams = 1) +
+                     ggplot2::labs(title = "Chi-square Q-Q Plot", 
+                                   subtitle = "with 1 degree of freedom") +
+                     case_study_theme(),
+                   ncol = 2)
+```
+
+There are several other ways we can look at the distribution of our data: boxplots, histograms, etc.; however, I have decided to introduce violin plots here. Violin plots are essentially a combination of the data we would get in a histogram and a boxplot: we get the density curve of the distribution and information about the summary statistics (first and third quartiles, median, min/max, etc.). This means not only do we get to see the distribution of the data and summary statistics, but we get some intuition into the dispersion measures (like range and interquartile range) which I will discuss again in a later section. I have also included information on the mean and standard deviations in the violin plots by metric in Figure \ref{fig:EDA_violin_plots} represented as the black dot and vertical line (horizontal lines are the first quartile, median, and third quartile, bottom to top).
+
+\pagebreak
+
+```{r EDA_violin_plots, fig.cap="\\label{fig:EDA_violin_plots}Distribution of data using violin plots", fig.width=10, fig.height=13.5, echo=FALSE}
+violin_plot_all_distributions
+```
+
+We can observe from the violin plots in Figure \ref{fig:EDA_violin_plots} that our data is definitely not normal. Most metrics are multi-modal (they have multiple modes---most common value). The means are very close to the medians meaning the data is not very skewed to the left or the right. There are some metrics that have very little variation---margin, CTR; most of their density is within a small range. Spend-related metrics have much lower densities throughout when compared to performance metrics; this makes sense, because we have budgets of all sizes represented and each client is different, thus a large range and long interquartile ranges ($IQR = Q3 - Q1$). 
+
+When comparing the distributions of the percentage metrics, we see that CTR has the lowest variance while COS has very long tails. There aren't any long tails with clicks, conversions, and displays which we would expect from looking at clients from the same tier. Notice also that the displays violin plot is higher up than the clicks and conversions violin plots; this follows our intuition---displays come first, a fraction of those get clicks, and then, some become conversions. 
+
+Site events violin plots are pretty similar in patterns, but, looking at the territory RexT ones, it's very easy to see the regions that contribute most (US and Brazil). All the regions have very different distributions, but observe that the higher plots seem to also be more consistent (less volatile). 
+
+#### Dispersion Measures
+When looking at the violin plots in Figure \ref{fig:EDA_violin_plots}, we could see the range ($max - min$), IQR, standard deviation from each side of the mean (and, therefore, also the variance). These are all measures of dispersion, or how far apart a given observation can be expected to be from other observations. Another commonly used one is the coefficient of variation which gives the typical deviation from the mean and can be expressed as a percentage. It is defined as:
+
+\begin{equation}
+\centering
+  Coefficient\_of\_variation = \frac{\sigma}{\mu}
+\label{eq:coefficient_of_variation}
+\end{equation}
+
+*where*:
+
+* *$\sigma$ = standard deviation*
+* *$\mu$ = mean*
+
+In Figure \ref{fig:EDA_violin_metric_plots}, we have violin plots showing the coefficient of variation by metric. Spend-related metrics have nearly all of their density at or around 0% coefficient of variation with some long tails; this means these metrics are expected to be stable with few extreme values. This matches what we observe currently with the `SCOPE` alerts: RexT and spend are flagged much less often than the percentage performance metrics (COS, CTR, CR). There is more deviation with territory RexT most likely due to variation with the smaller territories being more common. Typical variation from the mean is very low for CTR, but much higher for COS and CR; it's no coincidence that those 2 metrics are the most commonly triggered in the current version of the alerts. Clicks, conversions, and displays are a little more stable, however, conversions has a very long right tail (meaning some very large deviations above the mean). Typical deviations from the mean for site events are essentially zero, as we would expect, because visitors to a site are pretty constant over time. The tails are much longer on non-app tags and on specific events.
+
+#### Correlation --- Relationships Between Metrics
+When modeling how to detect anomalies, we need to keep in mind how the metrics are related to one another. If a change in one will cause a change in another, we should be using both to model that behavior. Linear relationships between the metrics can be captured by the Pearson correlation coefficient. A correlation coefficient of 1 (or -1) is perfect positive (negative) correlation meaning an increase in metric A will cause an increase (decrease) in metric B. The correlation coefficient is always between -1 and 1, so we can also get a sense of the strength of this relationship; strong relationships are close to $\pm 1$ and weak ones are close to $\pm 0.5$. A correlation coefficient of 0 represents no correlation, and the correlation of a metric to itself will always be 1.
+
+\pagebreak
+
+```{r EDA_violin_metric_plots, fig.cap="\\label{fig:EDA_violin_metric_plots}Distribution of coefficient of variation by metric", fig.width=10, fig.height=13.5, echo=FALSE}
+coefficient_of_variation_plots
+```
+
+With that foundation, we can look at the linear relationships between our metrics using the correlation matrices in Figure \ref{fig:correlation_matrices}. As we would expect, we have strong positive correlations between clicks and displays and amongst the spend-related metrics. We have weaker correlations between spend-related metrics and clicks, conversions, displays, as well as between clicks and conversions and displays and conversions. There is perfect positive correlation between North America and Americas, US and North America, and US and Americas; this is because the US is by far the largest component in North America and the Americas. Similarly, the strongest correlations for LATAM are with Brazil which is its largest component. Perhaps the strong correlation between the US and SAM Other comes as a surprise to you; this is most likely due to the US being an indicator of the Americas performance as a whole---we would expect others to follow it like with the Dow for the stock market. At the site events level, we don't have many noteworthy correlations; site level is highly correlated with desktop and mobile and somewhat with tablet --- probably just due to app being such a small portion of site level.
+
+```{r correlation_matrices, fig.cap="\\label{fig:correlation_matrices}Correlation matrices (left to right from top-left: AS, RexT, site type, event name)", echo=FALSE, fig.height=7, fig.width=10}
+par(mfrow = c(2, 2))
+correlation_matrix(correlation_data_for_EDA$AS)
+correlation_matrix(correlation_data_for_EDA$RexT)
+correlation_matrix(correlation_data_for_EDA$site_type)
+correlation_matrix(correlation_data_for_EDA$event_name)
+par(mfrow = c(1, 1))
+```
+
+#### Seasonality
+To get an idea of global seasonality trends, I made violin plots by day of week for all our metrics (Figure \ref{fig:EDA_violin_seasonality_plots}). We should expect that metrics with strong seasonality trends on the weekly level will have the plots at varying heights each day of the week. Quite interestingly, we can observe that we only have global weekly seasonality on the territory level. This debunks the thought that the weekend performs differently as a rule; if that were true, we would see it across the board. This means that this may be true, but in opposite directions for different clients, and thus cancelled out when aggregated. Alternatively, there could actually be no strong seasonality to pick up on. 
+```{r EDA_violin_seasonality_plots, fig.cap="\\label{fig:EDA_violin_seasonality_plots}Distribution of metrics by day of week", fig.width=10, fig.height=13.5, echo=FALSE}
+seasonality_plots + ggplot2::theme(axis.text.y = element_blank(), axis.line.y = element_blank(), axis.title.y = element_blank(), axis.ticks.y = element_blank())
+```

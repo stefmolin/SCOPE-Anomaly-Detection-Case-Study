@@ -1,0 +1,48 @@
+---
+title: "Logistic Regression"
+author: "Stefanie Molin"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output: html_document
+---
+
+```{r template-setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# load the case study library
+library(modelAnalyzeR)
+library(dplyr)
+
+# all data will be loaded in the parent document and referenced within each of the child sections
+```
+
+### Logisitic Regression
+How it works in detail. Parameters experimented with and what they do.
+
+*Note that this method will be performed in Python using Scikit-learn.*
+
+```{r format_data_to_pass_to_python, echo=FALSE, eval=FALSE}
+python_AS_data <- prep_AS_for_python(AS_data, days = 25)
+python_TS_data <- prep_TS_for_python(TS_data, days = 25)
+python_RexT_data <- prep_RexT_for_python(RexT_data, days = 30)
+
+# write to files for transfer
+write.csv(x = python_AS_data, file = params$python_AS_file, row.names = FALSE)
+write.csv(x = python_TS_data, file = params$python_TS_file, row.names = FALSE)
+write.csv(x = python_RexT_data, file = params$python_RexT_file, row.names = FALSE)
+```
+
+#### Results
+Evaluate best performance (tuned parameters) against the criteria defined in the main document for each of the time periods.
+
+**TO DO** Tables go here
+One per AS/TS/Exec
+
+#### ROC Curve
+Graph all points on the graph as lines per AS/TS/Exec and as an overall line
+
+#### Alogrithm Complexity  
+
+
+#### Conclusions
+Observations noticed on the results. Strengths/Weaknesses of the model. Any patterns?
+

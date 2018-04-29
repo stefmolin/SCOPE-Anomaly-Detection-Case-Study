@@ -1,0 +1,482 @@
+---
+title: "Percent Change from Median"
+author: "Stefanie Molin"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output: html_document
+---
+
+```{r change-from-median-setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# load the case study library
+library(modelAnalyzeR)
+library(dplyr)
+
+# all data will be loaded in the parent document and referenced within each of the child sections
+```
+
+### Median vs. Percent Change
+For the sake of completeness, I will also look at percent change from median aggregations. This is the same process for the prior model using the mean, just changing the summary metric to the median. The mean is affected by outliers, while the median is robust; therefore, it is better to use the median when you may have outliers in the data you are using to determine whether a current value is abnormal. It should be noted that this model was never used in production---I'm providing it here to be thorough.
+
+\begin{equation}
+\centering
+  \% \Delta = \frac{yesterday - median(L7D)}{median(L7D)}
+\label{eq:percent_change_median_equation}
+\end{equation}
+
+As I did with the analysis on the percentage change from the mean, I will use ROC curves to identify the optimal lookback periods for the summary statistic (the median in this case) and pick a threshold with an acceptable false positive rate.
+
+#### Results
+Once again, our first step is to find the optimal lookback window and threshold for AS, TS, and RexT separately. The choice of the median as the summary statistic may also influence which will be best; we can't assume that what worked best for the mean will also suffice for the median. I will follow the process I used for the prior analysis on the mean. For clarity, I will repeat it here. I will graph ROC curves for each series for the 3 lookback windows (L7D, L30D, L60D) and a range of thresholds. From these I will take the lookback window that maximizes the area under the curve. Once we have our lookback window, I will choose a maximum false positive rate which will yield the threshold to use for flagging the alerts. Note that the maximum false positive rate will be roughly $1 - specificity$ when we dive into the results (see Equation \ref{eq:specificity}).
+
+```{r percent-change-from-median-data-prep, echo = FALSE, eval = FALSE}
+# calculate aggregations
+percent_change_from_median_AS <- prep_AS_percent_change(AS_data, FUN = median)
+percent_change_from_median_TS <- prep_TS_percent_change(TS_data, FUN = median)
+percent_change_from_median_RexT <- prep_RexT_percent_change(RexT_data, FUN = median)
+
+# remove L60D for RexT since it will be the L30D since the lookback is smaller
+percent_change_from_median_RexT <- percent_change_from_median_RexT %>% 
+  dplyr::filter(aggregation_level != 'L60D')
+
+# calculate ROC Curves
+roc_percent_change_median_AS <- ROC_curve(data = percent_change_from_median_AS, 
+                                          logs = logs, 
+                                          curve_name_column = "aggregation_level", 
+                                          prediction_column = "percent_change", 
+                                          method_name = "Percent Change vs. Median of Last X Days",
+                                          graph_title = "AS ROC Curve by Lookback")
+
+roc_percent_change_median_TS <- ROC_curve(data = percent_change_from_median_TS, 
+                                          logs = logs, 
+                                          curve_name_column = "aggregation_level", 
+                                          prediction_column = "percent_change", 
+                                          method_name = "Percent Change vs. Median of Last X Days",
+                                          graph_title = "TS ROC Curve by Lookback")
+
+roc_percent_change_median_RexT <- ROC_curve(data = percent_change_from_median_RexT, 
+                                            logs = logs, 
+                                            curve_name_column = "aggregation_level", 
+                                            prediction_column = "percent_change", 
+                                            method_name = "Percent Change vs. Median of Last X Days",
+                                            graph_title = "RexT ROC Curve by Lookback")
+
+# formatted ROC curves
+percent_change_median_AS_roc_curve <- roc_percent_change_median_AS$plot + lookback_window_color_scheme()
+percent_change_median_TS_roc_curve <- roc_percent_change_median_TS$plot + lookback_window_color_scheme()
+percent_change_median_RexT_roc_curve <- roc_percent_change_median_RexT$plot + lookback_window_color_scheme()
+
+# thresholds
+percent_change_from_median_AS_aggregation_level <- 'L7D'
+percent_change_from_median_AS_threshold <- roc_percent_change_median_AS$roc %>% 
+  dplyr::filter(series == percent_change_from_median_AS_aggregation_level & FPR <= .2) %>% 
+  head(1) %>% 
+  select(alert_threshold)
+
+percent_change_from_median_TS_aggregation_level <- 'L60D'
+percent_change_from_median_TS_threshold <- roc_percent_change_median_TS$roc %>% 
+  dplyr::filter(series == percent_change_from_median_TS_aggregation_level & FPR <= .2) %>% 
+  head(1) %>% 
+  select(alert_threshold)
+
+percent_change_from_median_RexT_aggregation_level <- 'L7D'
+percent_change_from_median_RexT_threshold <- roc_percent_change_median_RexT$roc %>% 
+  dplyr::filter(series == percent_change_from_median_RexT_aggregation_level & FPR <= .2) %>% 
+  head(1) %>% 
+  select(alert_threshold)
+
+# save all the data
+save(percent_change_from_median_AS, roc_percent_change_median_AS, 
+     percent_change_from_median_TS, roc_percent_change_median_TS, 
+     percent_change_from_median_RexT, roc_percent_change_median_RexT, 
+     percent_change_median_AS_roc_curve, percent_change_median_TS_roc_curve, percent_change_median_RexT_roc_curve,
+     percent_change_from_median_AS_aggregation_level, percent_change_from_median_AS_threshold,
+     percent_change_from_median_TS_aggregation_level, percent_change_from_median_TS_threshold,
+     percent_change_from_median_RexT_aggregation_level, percent_change_from_median_RexT_threshold,
+     file = params$median_percent_change_data_file)
+```
+
+```{r percent-change-from-median-data-load, echo = FALSE}
+load(params$median_percent_change_data_file)
+```
+
+##### AS Results
+With the median, last 60 days still seems to be too much data. However, it is also very close between the 7- and 30-day lookbacks. As with the mean, the 7-day is better than the 30-day. This is most likely due to the fact that a few days of abnormal performance won't affect the median, so the 7-day is still a full picture of what to expect from performance.
+
+```{r percent_change_from_median_AS_lookback_roc, fig.cap="\\label{fig:percent_change_from_median_AS_lookback_roc}ROC curve for AS alerts using percent change from the median at various lookbacks", echo = FALSE}
+percent_change_median_AS_roc_curve
+```
+
+It's interesting to note that, as with the mean, our performance converges to that of the method of randomly classifying (diagonal line), but at an lower false positive rate of about 76%. This means that at thresholds of 3% or lower, every positive we trigger has an equal likelihood of being a true positive or a false positive---not at all optimal.
+
+Using the ROC curve data (Figure \ref{fig:percent_change_from_median_AS_lookback_roc}), I have identified the threshold of `r percent_change_from_median_AS_threshold %>% scopeR::format_percent(digits = 0)` by choosing a threshold with a false positive rate of 20%. This will be used to check if AS metrics are anomalies when compared to the average of the last 7 days prior.
+
+```{r percent-change-from-median-AS-flag-alerts, echo=FALSE, eval=FALSE}
+percent_change_from_median_AS_results <- flag_percent_change_alerts(data = percent_change_from_median_AS, 
+                                                                    aggregation = percent_change_from_median_AS_aggregation_level, 
+                                                                    threshold = percent_change_from_median_AS_threshold[1,1])
+
+
+# regenerate the client and campaign name columns
+percent_change_from_median_AS_results <- percent_change_from_median_AS_results %>% 
+  mutate(client_name = str_split_fixed(as.character(series), ": ", 2)[,1], 
+         campaign_name = stringr::str_split_fixed(as.character(series), ": ", 2)[,2]) %>% 
+  mutate(campaign_name = ifelse(campaign_name == "", "NOT A CAMPAIGN", campaign_name))
+
+
+# calculate number of clients triggered
+percent_change_from_median_AS_percent_triggered <- percent_change_from_median_AS_results %>% 
+  dplyr::filter(series == client_name) %>% 
+  dplyr::group_by(client_name, run_date) %>% 
+  dplyr::summarize(has_alerts = max(is_alert)) %>% 
+  dplyr::group_by(run_date) %>% 
+  dplyr::summarize(num_clients = n(), 
+                   num_alerts = sum(has_alerts), 
+                   percent_with_alerts = num_alerts/num_clients)
+
+# calculate tables
+percent_change_from_median_AS_counts <- AS_alert_counts(percent_change_from_median_AS_results %>% 
+                                                          dplyr::filter(run_date == AS_TS_beginning_date), 
+                                                        percent_change_from_median_AS_results %>% 
+                                                          dplyr::filter(run_date == AS_TS_middle_date), 
+                                                        percent_change_from_median_AS_results %>% 
+                                                          dplyr::filter(run_date == AS_TS_end_date))
+percent_change_from_median_AS_metric_counts <- AS_alert_counts_by_metric(percent_change_from_median_AS_results %>%
+                                                                           dplyr::filter(run_date == AS_TS_beginning_date), 
+                                                                         percent_change_from_median_AS_results %>%
+                                                                           dplyr::filter(run_date == AS_TS_middle_date), 
+                                                                         percent_change_from_median_AS_results %>%
+                                                                           dplyr::filter(run_date == AS_TS_end_date))
+
+# comparisons to Metis
+percent_change_from_median_AS_comparison <- AS_overall_confusion_matrix(percent_change_from_median_AS_results %>%
+                                                                          dplyr::filter(run_date == AS_TS_beginning_date), 
+                                                                        percent_change_from_median_AS_results %>%
+                                                                          dplyr::filter(run_date == AS_TS_middle_date), 
+                                                                        percent_change_from_median_AS_results %>%
+                                                                          dplyr::filter(run_date == AS_TS_end_date), 
+                                                                        logs)
+percent_change_from_median_AS_metrics_comparision <- AS_metrics_confusion_matrix(percent_change_from_median_AS_results %>% 
+                                                                                   dplyr::filter(run_date == AS_TS_beginning_date), 
+                                                                                 percent_change_from_median_AS_results %>% 
+                                                                                   dplyr::filter(run_date == AS_TS_middle_date), 
+                                                                                 percent_change_from_median_AS_results %>% 
+                                                                                   dplyr::filter(run_date == AS_TS_end_date), logs)
+
+# graphs
+percent_change_median_AS_graphs <- arrange_AS_alert_count_graphs(overall_results_count = percent_change_from_median_AS_counts, 
+                                                                 metrics_count = percent_change_from_median_AS_metric_counts)
+
+# save results
+save(percent_change_from_median_AS_results, percent_change_from_median_AS_percent_triggered, 
+     percent_change_from_median_AS_counts, percent_change_from_median_AS_metric_counts, 
+     percent_change_median_AS_graphs, 
+     percent_change_from_median_AS_comparison, percent_change_from_median_AS_metrics_comparision,
+     file = params$median_percent_change_AS_results_file)
+```
+
+```{r load-percent-change-from-median-AS-flagged-alerts, echo=FALSE}
+load(params$median_percent_change_AS_results_file)
+```
+
+As with the mean method discussed earlier, the percent change from the median is *super* senstive.  For the beginning of the month, we triggered alerts for `r percent_change_from_mean_AS_percent_triggered %>% dplyr::filter(run_date == '2017-11-02') %>% select(percent_with_alerts) %>% scopeR::format_percent(digits = 0)` of the clients we looked at! (end = `r percent_change_from_mean_AS_percent_triggered %>% dplyr::filter(run_date == '2017-11-01') %>% select(percent_with_alerts) %>% scopeR::format_percent(digits = 0)`, middle = `r percent_change_from_mean_AS_percent_triggered %>% dplyr::filter(run_date == '2017-10-20') %>% select(percent_with_alerts) %>% scopeR::format_percent(digits = 0)`). The median also seems to be a more sensitive method across the board compared to the mean, but it is especially more sensitive on the beginning and end of the month.  We observe the same pattern with margin and CTR alerts at the client-level as with the mean: very few alerts comparatively. Same is true with the campaign-level analysis. Our volume of alerts is higher, however. The alerts per client under the median (Figure \ref{fig:percent_change_from_median_AS_results_graphs}) have a similar distribution for the beginning and end of the month compared to the mean, but we actually reduced our median number of alerts middle of month and while increasing the spread for the box in the boxplot for the beginning and end of the month. Now, 50% of the clients have 2-7 alerts instead of 2-6. For the campaign alerts per client, the 50% sections of our distributions no longer align across time of month. Beginning of the month and end of month are shifted higher in alert count compared to the middle of the month. The median also has less clients in the 150+ alerts section.
+
+```{r percent_change_from_median_AS_results_graphs, fig.cap="\\label{fig:percent_change_from_median_AS_results_graphs}AS alert counts using Percent Change from the Median", fig.width=9, fig.height=7, echo=FALSE}
+percent_change_median_AS_graphs
+```
+
+As with the mean, our performance is pretty poor, though perhaps slightly better here as we seem to have identified a few extra true negatives and true positives (see Table \ref{tabs:percent_change_from_median_AS_results_metis_comparison_overall}). We still have abysmal `precision`, and our `recall` continues to be mediocre. Our `F1-score` is a far cry from 1. `Accuracy` is sub-80---we shouldn't even consider using this model. The performance is also horrendous by metric. We do the worst on conversions and CTR this time.
+```{r percent_change_from_median_AS_results_metis_comparison_overall, echo = FALSE}
+# perhaps it makes sense to display the confusion matrix here instead
+kable(percent_change_from_median_AS_comparison, 
+      digits = 2, format.args = list(big.mark = ","), 
+      caption = "\\label{tabs:percent_change_from_median_AS_results_metis_comparison_overall}Prediction vs. Metis for AS alerts using Percent Change from the Median")
+```
+
+```{r percent-change-from-median-AS-results-metis-comparison-metric, echo = FALSE}
+# perhaps it makes sense to display the confusion matrix here instead
+kable(percent_change_from_median_AS_metrics_comparision %>% 
+        dplyr::filter(as.character(Metric) != "**Total**") %>% 
+        dplyr::arrange(as.character(Metric)), 
+      row.names = FALSE, digits = 2, format.args = list(big.mark = ","))
+```
+
+##### TS Results
+With the mean, it was much clearer to see that 60 days was a better lookback window than 30 days, however, with the median they are much closer in performance. We will go with the 60 days once again here.
+
+```{r percent_change_from_median_TS_lookback_roc, fig.cap="\\label{fig:percent_change_from_median_TS_lookback_roc}ROC curve for TS alerts using percent change from the median at various lookbacks", echo = FALSE}
+percent_change_median_TS_roc_curve
+```
+
+Using the ROC curve data (Figure \ref{fig:percent_change_from_median_TS_lookback_roc}), I have identified the threshold of `r percent_change_from_median_TS_threshold %>% scopeR::format_percent(digits = 0)` by choosing a threshold with a false positive rate of 20%. This will be used to check if TS metrics are anomalies when compared to the average of the last 60 days prior. Notice how this threshold is lower than the AS metrics threshold of `r percent_change_from_median_AS_threshold %>% scopeR::format_percent(digits = 0)` at the same false positive rate; further evidence that the TS time series behave differently than their AS counterparts.
+
+```{r percent-change-from-median-TS-flag-alerts, echo=FALSE, eval=FALSE}
+percent_change_from_median_TS_results <- flag_percent_change_alerts(data = percent_change_from_median_TS, 
+                                                                    aggregation = percent_change_from_median_TS_aggregation_level, 
+                                                                    threshold = percent_change_from_median_TS_threshold[1,1])
+
+
+# regenerate the event_name and site_type columns
+percent_change_from_median_TS_results <- percent_change_from_median_TS_results %>% 
+  dplyr::mutate(partner_name = ifelse(kpi == 'site_events', as.character(series), 
+                                      str_sub(as.character(series), start = stri_locate_first_regex(series, "[A-Z]+")[1], 
+                                              end = stri_locate_first_regex(series, "[A-Z]+")[,2])), 
+                event_name = str_sub(str_extract(as.character(series), "\\s[a-z]+"), 2),
+                site_type = str_sub(str_extract(as.character(series), "(?:\\son\\s)[a-z]+"), 5)) %>% 
+  dplyr::mutate(event_name = ifelse(is.na(event_name), "SITE LEVEL", event_name),
+                site_type = ifelse(is.na(site_type), "SITE LEVEL", site_type))
+
+# calculate number of clients triggered
+percent_change_from_median_TS_percent_triggered <- percent_change_from_median_TS_results %>% 
+  dplyr::filter(series == partner_name) %>% 
+  dplyr::group_by(partner_name, run_date) %>% 
+  dplyr::summarize(has_alerts = max(is_alert)) %>% 
+  dplyr::group_by(run_date) %>% 
+  dplyr::summarize(num_clients = n(), num_alerts = sum(has_alerts), percent_with_alerts = num_alerts/num_clients)
+
+# calculate tables
+percent_change_from_median_TS_counts <- TS_alert_counts(percent_change_from_median_TS_results %>% 
+                                                          dplyr::filter(run_date == AS_TS_beginning_date), 
+                                                        percent_change_from_median_TS_results %>% 
+                                                          dplyr::filter(run_date == AS_TS_middle_date), 
+                                                        percent_change_from_median_TS_results %>% 
+                                                          dplyr::filter(run_date == AS_TS_end_date))
+percent_change_from_median_TS_metric_counts <- TS_alert_counts_by_metric(percent_change_from_median_TS_results %>%
+                                                                           dplyr::filter(run_date == AS_TS_beginning_date), 
+                                                                         percent_change_from_median_TS_results %>%
+                                                                           dplyr::filter(run_date == AS_TS_middle_date), 
+                                                                         percent_change_from_median_TS_results %>%
+                                                                           dplyr::filter(run_date == AS_TS_end_date))
+
+# comparisons to Metis
+percent_change_from_median_TS_comparison <- TS_overall_confusion_matrix(percent_change_from_median_TS_results %>%
+                                                                          dplyr::filter(run_date == AS_TS_beginning_date), 
+                                                                        percent_change_from_median_TS_results %>%
+                                                                          dplyr::filter(run_date == AS_TS_middle_date), 
+                                                                        percent_change_from_median_TS_results %>%
+                                                                          dplyr::filter(run_date == AS_TS_end_date),
+                                                                        logs)
+percent_change_from_median_TS_metrics_comparision <- TS_metrics_confusion_matrix(percent_change_from_median_TS_results %>% 
+                                                                                   dplyr::filter(run_date == AS_TS_beginning_date), 
+                                                                                 percent_change_from_median_TS_results %>% 
+                                                                                   dplyr::filter(run_date == AS_TS_middle_date), 
+                                                                                 percent_change_from_median_TS_results %>% 
+                                                                                   dplyr::filter(run_date == AS_TS_end_date), 
+                                                                                 logs)
+
+# graphs
+percent_change_median_TS_graphs <- arrange_TS_alert_count_graphs(overall_results_count = percent_change_from_median_TS_counts, 
+                                                                 metrics_count = percent_change_from_median_TS_metric_counts)
+
+# save results
+save(percent_change_from_median_TS_results, percent_change_from_median_TS_percent_triggered, 
+     percent_change_from_median_TS_counts, percent_change_from_median_TS_metric_counts, 
+     percent_change_median_TS_graphs,
+     percent_change_from_median_TS_comparison, percent_change_from_median_TS_metrics_comparision, 
+     file = params$median_percent_change_TS_results_file)
+```
+
+```{r load-percent-change-from-median-TS-flagged-alerts, echo = FALSE}
+load(params$median_percent_change_TS_results_file)
+```
+
+For the beginning of the month, we triggered alerts for `r percent_change_from_median_TS_percent_triggered %>% dplyr::filter(run_date == '2017-11-02') %>% dplyr::select(percent_with_alerts) %>% scopeR::format_percent(digits = 0)` of the clients we looked at (end = `r percent_change_from_median_TS_percent_triggered %>% dplyr::filter(run_date == '2017-11-01') %>% dplyr::select(percent_with_alerts) %>% scopeR::format_percent(digits = 0)`, middle = `r percent_change_from_median_TS_percent_triggered %>% dplyr::filter(run_date == '2017-10-20') %>% dplyr::select(percent_with_alerts) %>% scopeR::format_percent(digits = 0)`). With the TS metrics, the median is less sensitive than the mean. This is probably due to the TS metrics varying according to their seasonality component. We can observe the same pattern at the event name and site type as with the mean. We have fewer alerts on the larger and aggregate series: site-level and homepage, but many more alerts on the lower-traffic pages. There doesn't seem to be any discrimination by site type (remember that not all clients use app and tablet tags, so we have to take the raw counts with that in mind). The distribution of alerts for the median (Figure \ref{fig:percent_change_from_median_TS_results_graphs}) is pretty consistent with that of the mean; we have smaller variation in some spots, but nothing huge.
+
+```{r percent_change_from_median_TS_results_graphs, fig.cap="\\label{fig:percent_change_from_median_TS_results_graphs}TS alert counts using Percent Change from the Median", fig.width=9, fig.height=7, echo=FALSE}
+percent_change_median_TS_graphs
+```
+
+Additionally, if we look at a histogram of the site events (Figure \ref{fig:percent_change_from_median_TS_histogram}), we see that it is skewed, meaning that the median is a better measure of central tendency than the mean (which won't lie in the center in this case).
+```{r percent_change_from_median_TS_histogram, fig.cap="\\label{fig:percent_change_from_median_TS_histogram}Histogram of site events", echo = FALSE, fig.height=1.5}
+# sample histogram
+load(params$TS_histogram_data_file)
+
+data_for_TS_histogram %>% 
+  ggplot(aes(x = value)) + 
+  geom_histogram(colour = "#add8e6", fill = "#add8e6", bins = 10) + 
+  geom_vline(xintercept = median(data_for_TS_histogram$value), colour = "#4169e1") +
+  geom_text(aes(x = median(data_for_TS_histogram$value) - 3500, label = "Median", y = 7), 
+            angle = 90, vjust = 1.2, colour = "#4169e1") +
+  geom_vline(xintercept = mean(data_for_TS_histogram$value)) +
+  geom_text(aes(x = mean(data_for_TS_histogram$value) + 1000, label = "Mean", y = 7), 
+            angle = 90, vjust = 1.2) +
+  ggplot2::scale_x_continuous(labels = scales::comma) +
+  ggplot2::scale_y_continuous(labels = scales::comma) +
+  labs(x = "Events", y = "Count", subtitle = "TS site events for random advertiser") + 
+  case_study_theme()
+```
+
+As with the AS results, our metrics are poor across the board. As shown in Table \ref{tabs:percent_change_from_median_TS_results_metis_comparison_overall}, we are flagging such a large number of cases that we hardly have any false negatives, but our false positives are quite high. `F1-score` is very low and accuracy is poor. We can do much better than this. We are performing best on basket and site-level, just like with the mean, no improvement here. With site type, site-level is the best performing, but no better than the mean.
+```{r percent_change_from_median_TS_results_metis_comparison_overall, echo = FALSE}
+# perhaps it makes sense to display the confusion matrix here instead
+kable(percent_change_from_median_TS_comparison, 
+      digits = 2, format.args = list(big.mark = ","), 
+      caption = "\\label{tabs:percent_change_from_median_TS_results_metis_comparison_overall}Prediction vs. Metis for TS alerts using Percent Change from the Median")
+```
+
+```{r percent-change-from-median-TS-results-metis-comparison-tag-event, echo = FALSE}
+# perhaps it makes sense to display the confusion matrix here instead
+kable(percent_change_from_median_TS_metrics_comparision$event_name %>%
+        dplyr::filter(as.character(Metric) != "**TOTAL**") %>% 
+        dplyr::arrange(as.character(Metric)), 
+      row.names = FALSE, digits = 2, format.args = list(big.mark = ","))
+```
+
+```{r percent-change-from-median-TS-results-metis-comparison-tag-site-type, echo = FALSE}
+# perhaps it makes sense to display the confusion matrix here instead
+kable(percent_change_from_median_TS_metrics_comparision$site_type %>%
+        dplyr::filter(as.character(Metric) != "**Total**") %>% 
+        dplyr::arrange(as.character(Metric)), 
+      row.names = FALSE, digits = 2, format.args = list(big.mark = ","))
+```
+
+##### Territory RexT Results
+
+```{r percent_change_from_median_RexT_lookback_roc, fig.cap="\\label{fig:percent_change_from_median_RexT_lookback_roc}ROC curves for RexT alerts using percent change from the median at various lookbacks", echo = FALSE}
+percent_change_median_RexT_roc_curve
+```
+
+Here, we only have a choice between 7 days and 30 days because the RexT alerts only look back 30 days. As with the mean, when using the median, 7 days becomes the better lookback window. This is most likely due to recent values affecting the mean, while the median is robust to these changes.
+
+Using the ROC curve data (Figure \ref{fig:percent_change_from_median_RexT_lookback_roc}), I have identified the threshold of `r percent_change_from_median_RexT_threshold %>% scopeR::format_percent(digits = 0)` by choosing a threshold with a false positive rate of 20%. This will be used to check if territory RexT has anomalies when compared to the average of the last 30 days prior. Notice how this threshold is lower than the AS metrics threshold of `r percent_change_from_median_AS_threshold %>% scopeR::format_percent(digits = 0)` and the TS threshold of `r percent_change_from_median_TS_threshold %>% scopeR::format_percent(digits = 0)` at the same false positive rate; further evidence that the territory RexT time series, being so aggregated, has a much lower threshold for anomalous behavior.
+
+```{r percent-change-from-median-RexT-flag-alerts, echo=FALSE, eval=FALSE}
+percent_change_from_median_RexT_results <- flag_percent_change_alerts(data = percent_change_from_median_RexT, 
+                                                                      aggregation = percent_change_from_median_RexT_aggregation_level, 
+                                                                      threshold = percent_change_from_median_RexT_threshold[1,1])
+
+# add columns for looking at results
+region_lookup <- RexT_data %>% 
+  dplyr::distinct(country, subregion, region, ranking) %>% 
+  dplyr::mutate_all(as.character) %>% 
+  dplyr::mutate(series = ifelse(subregion == 'N/A', region, ifelse(country == 'N/A', subregion, country)))
+
+percent_change_from_median_RexT_results <- percent_change_from_median_RexT_results %>% 
+  dplyr::inner_join(region_lookup, by = "series")
+
+# calculate tables
+percent_change_from_median_RexT_counts <- exec_alert_counts(percent_change_from_median_RexT_results, 
+                                                            beginning_dates = exec_beginning_dates, 
+                                                            middle_dates = exec_middle_dates, 
+                                                            end_dates = exec_end_dates)
+percent_change_from_median_RexT_territory_counts <- exec_alert_counts_by_territory(percent_change_from_median_RexT_results, 
+                                                                                   beginning_dates = exec_beginning_dates, 
+                                                                                   middle_dates = exec_middle_dates,
+                                                                                   end_dates = exec_end_dates)
+
+# compare to Metis
+percent_change_from_median_RexT_comparison <- exec_overall_confusion_matrix(percent_change_from_median_RexT_results,
+                                                                            logs, 
+                                                                            beginning_dates = exec_beginning_dates,
+                                                                            middle_dates = exec_middle_dates, 
+                                                                            end_dates = exec_end_dates)
+percent_change_from_median_RexT_territory_comparison <- exec_territories_confusion_matrix(percent_change_from_median_RexT_results, 
+                                                                                          logs)
+
+# graphs
+percent_change_median_RexT_graphs <- arrange_RexT_alert_count_graphs(percent_change_from_median_RexT_counts,
+                                                                     percent_change_from_median_RexT_territory_counts)
+
+# save results
+save(percent_change_from_median_RexT_results, percent_change_from_median_RexT_results, 
+     percent_change_from_median_RexT_counts, percent_change_from_median_RexT_territory_counts, 
+     percent_change_median_RexT_graphs, 
+     percent_change_from_median_RexT_comparison, percent_change_from_median_RexT_territory_comparison,
+     file = params$median_percent_change_RexT_results_file)
+```
+
+```{r load-percent-change-from-median-RexT-flagged-alerts, echo=FALSE}
+load(params$median_percent_change_RexT_results_file)
+```
+
+Percent change from the median is most sensitive at the country-level and least sensitive at the region-level; the more granular the series, the higher the volume of alerts. Unlike with the mean, we have the majority of the alerts in the beginning of the month, decreasing as the month goes on. This model flags Canada, the LATAM countries, and the subregion itself quite a bit---probably due to them being much smaller volume-wise, and thus, more prone to volatility. In the case of RexT data, we trigger more alerts using the median compared to the mean; additionally, we have more variation in alert counts (see Figure \ref{fig:percent_change_from_median_results_graphs}).
+
+```{r percent_change_from_median_results_graphs, fig.cap="\\label{fig:percent_change_from_median_results_graphs}RexT alert counts using Percent Change from the Median", fig.width=9, fig.height=6, echo=FALSE}
+percent_change_median_RexT_graphs
+```
+
+Just like with the mean, we perform significantly worse for the end of the month; we flagged very few during this period, however, it looks like the model wasn't catching things (see Table \ref{tabs:percent_change_from_median_RexT_results_metis_comparison_overall}). Other than the poor performance for end-of-month, this model performs *much* better on this data compared to the AS and TS data sets. Though still not something we would want to use in practice, as the scores are still not great, we can see that the more aggregated the data gets, the better this method performs. This model performs perfectly for the Americas and Brazil and pretty well on Mexico; the other territories are all over the place. Notice that only Brazil worked perfectly on the mean and median methods. Overall, the median and mean are pretty equivalent, but the median is slightly better. Keep in mind that this isn't a huge sample size when we go down to the territory granularity, so take this with a grain of salt. 
+```{r percent_change_from_median_RexT_results_metis_comparison_overall, echo = FALSE}
+# perhaps it makes sense to display the confusion matrix here instead
+kable(percent_change_from_median_RexT_comparison, 
+      row.names = FALSE, digits = 2, 
+      caption = "\\label{tabs:percent_change_from_median_RexT_results_metis_comparison_overall}Prediction vs. Metis for territory RexT alerts using Percent Change from the Median")
+```
+
+```{r percent-change-from-median-RexT-results-metis-comparison-by-territory, echo = FALSE}
+# perhaps it makes sense to display the confusion matrix here instead
+kable(percent_change_from_median_RexT_territory_comparison %>% 
+        dplyr::filter(as.character(Territory) != "**Total**"), 
+      row.names = FALSE, digits = 2)
+```
+
+#### ROC Curve
+As with the mean, this method performs worst on AS and best on territory RexT (see ROC curves in Figure \ref{fig:percent_change_from_median_roc_curve}). Percent change metrics won't work for the granularity we need in our alerting system. 
+```{r percent_change_from_median_roc_curve, fig.cap="\\label{fig:percent_change_from_median_roc_curve}ROC curves for percent change from the median at optimal thresholds", echo = FALSE, warning=FALSE}
+ROC_curve(data = rbind(percent_change_from_median_AS %>% 
+                         dplyr::filter(aggregation_level == percent_change_from_median_AS_aggregation_level) %>%
+                         dplyr::mutate(product = "AS"),
+                       percent_change_from_median_TS %>% 
+                         dplyr::filter(aggregation_level == percent_change_from_median_TS_aggregation_level) %>%
+                         dplyr::mutate(product = "TS"),
+                       percent_change_from_median_RexT %>% 
+                         dplyr::filter(aggregation_level == percent_change_from_median_RexT_aggregation_level) %>%
+                         dplyr::mutate(product = "RexT")), 
+          logs = logs, 
+          curve_name_column = "product", 
+          prediction_column = "percent_change", 
+          method_name = "Percent Change vs. Median with Chosen FPR Threshold Annotated",
+          graph_title = "ROC Curve by Product")$plot +
+  ggplot2::geom_vline(xintercept = 0.2, colour = "purple")
+```
+
+Using the ROC curves in Figure \ref{fig:percent_change_from_median_vs_mean_roc_curve}, we can see whether the mean or median performs best for each of our data types; the curve with the most area underneath it is better (although not necessarily optimal). For the AS metrics, somewhat surprisingly, the mean is better than the median. There isn't much of a difference for the TS metrics. The median just edges out the mean for the territory RexT data.
+```{r percent_change_from_median_vs_mean_roc_curve, fig.cap="\\label{fig:percent_change_from_median_vs_mean_roc_curve}Mean vs. Median ROC curves by SCOPE product", echo=FALSE, warning=FALSE, fig.height=3.5, fig.width=8}
+ROC_curve_facet(data = rbind(percent_change_from_mean_AS %>% 
+                               dplyr::filter(aggregation_level == percent_change_from_mean_AS_aggregation_level) %>% 
+                               dplyr::mutate(product = "Mean", facet_by = "AS"),
+                             percent_change_from_median_AS %>% 
+                               dplyr::filter(aggregation_level == percent_change_from_median_AS_aggregation_level) %>% 
+                               dplyr::mutate(product = "Median", facet_by = "AS"),
+                             percent_change_from_mean_TS %>% 
+                               dplyr::filter(aggregation_level == percent_change_from_mean_TS_aggregation_level) %>% 
+                               dplyr::mutate(product = "Mean", facet_by = "TS"),
+                             percent_change_from_median_TS %>% 
+                               dplyr::filter(aggregation_level == percent_change_from_median_TS_aggregation_level) %>% 
+                               dplyr::mutate(product = "Median", facet_by = "TS"),
+                             percent_change_from_mean_RexT %>% 
+                               dplyr::filter(aggregation_level == percent_change_from_mean_RexT_aggregation_level) %>% 
+                               dplyr::mutate(product = "Mean", facet_by = "RexT"),
+                             percent_change_from_median_RexT %>% 
+                               dplyr::filter(aggregation_level == percent_change_from_median_RexT_aggregation_level) %>%
+                               dplyr::mutate(product = "Median", facet_by = "RexT")), 
+                logs = logs, 
+                facet_column = "facet_by", 
+                curve_name_column = "product", 
+                prediction_column = "percent_change", 
+                method_name = "Percent Change Performance with Chosen FPR Threshold Annotated",
+                graph_title = "ROC Curve: Mean vs. Median")$plot +
+  ggplot2::geom_vline(xintercept = 0.2, colour = "purple") +
+    scale_color_manual(values = brewer.pal(8, "Set1")[7:8])
+```
+
+These findings agree with the conclusion that the more aggregated the data is the better off you are using the median and, with more granular data, the mean. The AS data is the most granular and the RexT the most aggregated with the TS in the middle. Also, notice that while I noted in several places, for both the mean and the median, that this method is too sensitive, we could have changed our threshold by lowering our tolerance for false positives. To do so, we move the purple line in the graphs to the left, but observe the huge drop-offs we would have in true positive rates! Our optimal ROC curve would not have such a large drop-off at a relatively large false positive rate; the optimal ROC curve would be at 100% true positive rate at this point and most likely also at lower false positive rates (see Figure \ref{fig:sample_roc_curve}).
+
+#### Alogrithm Complexity  
+As with the mean, this method is implemented as a vectorized operation, so it will run faster time-wise than the complexity dictates; however, for the complexity analysis we have to check each combination against the threshold which is equivalent to running it through a loop. Average complexity ($\Theta$):
+
+\begin{equation}
+\centering
+  \Theta(n) = k * n
+\label{eq:percent_change_median_big_o}
+\end{equation}
+
+*where*:
+
+* *$n$ = number of series to inspect (i.e. total number of clients + total number of campaigns)*
+* *$k$ = number of KPIs to inspect (for each series)*
+
+This gives us an overall linear complexity ($\Theta(n)$) since $k$ should always be way less than $n$ as well as a tight best-case of $\Omega(n)$ and tight worst-case of $O(n)$. For large $n$, we would be better off with a faster algorithm if one exists.
+
+#### Conclusions
+As with the mean, this model performed poorly on `precision`, `recall`, and `F1-score`; our accuracy and ROC curves could definitely be improved. We are successfully flagging a lot of alerts, but our false positives are pretty high. We have very few false negatives, but not because our model is great at capturing expected performance, but rather because we flag so many things as positive that the conditional probability of flagging negative and having it be wrong is low. Be it with the mean or median; lookback of 7, 30, or 60 days, percent change metrics won't work for the granularity we need in our alerting system.

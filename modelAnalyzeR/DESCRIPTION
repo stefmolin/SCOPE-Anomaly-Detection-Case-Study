@@ -1,0 +1,20 @@
+Package: modelAnalyzeR
+Title: Functions for SCOPE Model Case Study
+Version: 0.0.1
+Authors@R: person("Stefanie", "Molin", email = "s.molin@company.com", role = c("aut", "cre"))
+Description: Utility functions for conducting the SCOPE model case study.
+Depends: R (>= 3.4.2)
+License: file LICENSE
+Encoding: UTF-8
+LazyData: true
+Imports: caret,
+         corrplot,
+         cowplot,
+         DBI,
+         dplyr,
+         grid,
+         reshape2,
+         RPostgreSQL,
+         scopeR,
+         yaml
+RoxygenNote: 6.0.1

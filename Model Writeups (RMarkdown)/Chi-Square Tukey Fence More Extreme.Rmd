@@ -1,0 +1,270 @@
+---
+title: "Chi-Square, Tukey Fence, 10% More Extreme"
+author: "Stefanie Molin"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output: html_document
+---
+
+```{r chi-square-tukey-fence-more-extreme-setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# load the case study library
+library(modelAnalyzeR)
+library(dplyr)
+
+# all data will be loaded in the parent document and referenced within each of the child sections
+```
+
+### Chi-Square + Tukey Fence + 10% More Extreme Check
+SCOPE moved to this model on May 16, 2017 after calculating `precision` for this method and the Twitter method we looked at earlier.  We were looking for something to drastically reduce our sensitivity while still capturing extreme values as we built the `Metis` web app to collect labelled data and eventually enable us to pursue a machine learning method of identifying accounts with issues. It is important to note that while we picked the model that maximized `precision`, since we had no insight into false negatives, we were unable to calculate `recall` at the time, and therefore will most likely have increased our false negatives due to lack of penalization, as with the `F1-score`. Here, I will be evaluating this model with all the data we need to calculate these metrics, and thus, will have a more accurate view of its performance.
+
+##### Chi-Square
+
+\begin{figure}[h!]
+\centering
+  \includegraphics[width=0.3\textwidth]{images/chi-square.png}
+\caption{Chi-square distribution at various degrees of freedom.}
+\label{fig:chi_square_distribution}
+\end{figure}
+
+First, a test statistic is calculated for each time series to be checked for anomalies (i.e. each metric for each client has its own test statistic). In doing so, we put the data on standard scale (this prevents the magnitude of the changes from causing alerts even if when looking at the whole series the change doesn't seem large). The test statistic is defined as: 
+
+\begin{equation}
+\centering
+  \frac{x - mean(x)^2}{var(x)}
+\label{eq:chi_square_test_statistic}
+\end{equation}
+
+Then, I calculate the critical value using the Chi-square distribution (Figure \ref{fig:chi_square_distribution}) at a given statistical significance threshold (depending on metric---see Table \ref{tabs:chi_square_stat_sig_table}). If the value of the test statistic is greater than this (meaning it is outside what we would expect to observe), we trigger an alert.
+
+```{r chi_square_stat_sig_table, echo=FALSE}
+pander(data.frame("Metric" = c("COS", "CR", "CTR", "Events (Site/Tag)", "RexT (Client/Euro)", "RexT (Territory)", "Spend", "Other (Margin, Conversions, etc.)"), 
+                  "Stat Sig" = c("99.95%", "99.90%", "99.90%", "97.50%", "99.75%", "97.50%", "99.75%", "95.00%"), 
+                  check.names = FALSE), 
+       caption = "\\label{tabs:chi_square_stat_sig_table}Statistical significance levels used for Chi-Square test.")
+```
+
+
+##### Tukey Fence
+
+In addition to the Chi-Square test, we check that the value is outside the bounds of the Tukey fence, with lower bound of $Q_1 - 3 * IQR$ and upper bound of $Q_3 + 3 * IQR$ where $Q_1$ is the first quartile, $Q_3$ is the third quartile and $IQR = Q_3 - Q_1$ (see Figure \ref{fig:example_box_plot_for_tukey_fence}). If yesterday's value is above the upper bound or below the lower bound, it is an alert.
+
+\begin{figure}[h!]
+\centering
+  \includegraphics[width=0.5\textwidth]{images/boxplot_explanation.png}
+\caption{Boxplot showing how values of the Tukey fence are calculated.}
+\label{fig:example_box_plot_for_tukey_fence}
+\end{figure}
+
+##### Value Has Gotten More Extreme
+
+I also require that yesterday's value is 10% more extreme than the day before, meaning that if we are below the lower bound on the Tukey fence, we check that yesterday's value is less than or equal to 90% of the day before's (it has decreased further); if we are above the upper bound on the Tukey fence, we check that yesterday's value is greater than or equal to 110% of the day before's (it has increased further).
+
+#### Results
+Before going into the results on each of the `SCOPE` products, we should note that this model lacks a seasonality component. As such, we may be wrongly classifiying series when seasonality explains the fluctuation. We have feedback from several users for each product, but they all look for different patterns as it relates to their job philosophy; this makes finding an ideal model difficult. When dealing with time series data, not using a seasonality component seems foolish, however, we need to make sure we use it properly otherwise it doesn't perform better than an approach such as this one.
+
+Furthermore, this model was *purposely* designed to be less sensitive than its predecessors. We were looking to quickly lower the amount of irrelevant alerts so that the flagged alerts would carry more weight with `SCOPE` users. Naturally, since we maximized the only metric we could calculate at the time (`precision`), we have introduced many more false negatives; hence, the low `recall` overall.
+
+We can expect there to be differences between the territory RexT series and the AS/TS series due to volume. We have much more data to work with for the AS/TS series and those are naturally more volatile, while the territory RexT series, being aggregates, will smooth out the underlying issues and shrink the variance. This leads us to have very few "alerts" to look at.
+
+```{r chi-square-find-anomalies, eval=FALSE, echo=FALSE}
+# AS results
+chi_beginning_of_month_AS <- chi_tukey_pipeline_AS(AS_data %>% 
+                                                 dplyr::filter(run_date == AS_TS_beginning_date), 
+                                               yesterday = as.Date(AS_TS_beginning_date) - 1)$results
+chi_middle_of_month_AS <- chi_tukey_pipeline_AS(AS_data %>% 
+                                              dplyr::filter(run_date == AS_TS_middle_date),
+                                            yesterday = as.Date(AS_TS_middle_date) - 1)$results
+chi_end_of_month_AS <- chi_tukey_pipeline_AS(AS_data %>% 
+                                           dplyr::filter(run_date == AS_TS_end_date),
+                                         yesterday = as.Date(AS_TS_end_date) - 1)$results
+
+# TS results
+chi_beginning_of_month_TS <- chi_tukey_pipeline_TS(TS_data %>%
+                                                 dplyr::filter(run_date == AS_TS_beginning_date),
+                                               yesterday = as.Date(AS_TS_beginning_date) - 1)$results
+chi_middle_of_month_TS <- chi_tukey_pipeline_TS(TS_data %>% 
+                                              dplyr::filter(run_date == AS_TS_middle_date),
+                                            yesterday = as.Date(AS_TS_middle_date) - 1)$results
+chi_end_of_month_TS <- chi_tukey_pipeline_TS(TS_data %>% 
+                                           dplyr::filter(run_date == AS_TS_end_date),
+                                         yesterday = as.Date(AS_TS_end_date) - 1)$results
+
+# Exec results
+chi_results_exec <- chi_tukey_pipeline_exec(RexT_data)$results
+
+# calculate tables
+chi_AS_counts <- AS_alert_counts(chi_beginning_of_month_AS, 
+                                 chi_middle_of_month_AS, 
+                                 chi_end_of_month_AS)
+chi_AS_metric_counts <- AS_alert_counts_by_metric(chi_beginning_of_month_AS,
+                                                  chi_middle_of_month_AS,
+                                                  chi_end_of_month_AS)
+
+chi_TS_counts <- TS_alert_counts(chi_beginning_of_month_TS, 
+                                 chi_middle_of_month_TS, 
+                                 chi_end_of_month_TS)
+chi_TS_metric_counts <- TS_alert_counts_by_metric(chi_beginning_of_month_TS,
+                                                  chi_middle_of_month_TS,
+                                                  chi_end_of_month_TS)
+
+chi_exec_counts <- exec_alert_counts(chi_results_exec, 
+                                     beginning_dates = exec_beginning_dates, 
+                                     middle_dates = exec_middle_dates, 
+                                     end_dates = exec_end_dates)
+chi_exec_territory_counts <- exec_alert_counts_by_territory(chi_results_exec, 
+                                                            beginning_dates = exec_beginning_dates, 
+                                                            middle_dates = exec_middle_dates,
+                                                            end_dates = exec_end_dates)
+```
+
+```{r chi-square-save-results, echo=FALSE, eval=FALSE}
+# save the dataframes resulting from the above
+save(chi_beginning_of_month_AS, chi_middle_of_month_AS, chi_end_of_month_AS, 
+     chi_AS_counts, chi_AS_metric_counts, file = params$chi_square_AS_results_file)
+save(chi_beginning_of_month_TS, chi_middle_of_month_TS, chi_end_of_month_TS, 
+     chi_TS_counts, chi_TS_metric_counts, file = params$chi_square_TS_results_file)
+save(chi_results_exec, chi_exec_counts, chi_exec_territory_counts, 
+     file = params$chi_square_Exec_results_file)
+```
+
+```{r chi-square-load-results, echo=FALSE}
+# load the above file in each time it compiles this document
+load(params$chi_square_AS_results_file)
+load(params$chi_square_TS_results_file)
+load(params$chi_square_Exec_results_file)
+```
+
+
+##### AS Results
+
+Since our model doesn't take seasonality into account, we trigger more alerts during the beginning and end of the month compared to the middle; however, our false negatives are spread evenly across the dates studied. Some of these "alerts" can be explained by seasonality patterns, and, therefore, get marked as false positives. We have become much less sensitive and increased our false negatives; this gives us poor `recall` and consequently a low `F1-score`. We see that, for the most part, if a campaign or client has an alert, it is just for one metric. We seem to trigger many more alerts for beginning and end of month compared to middle of the month on spend and performance-related metrics. This is due to our model not using seasonality. Many advertisers have monthly budgets, if they pace too hot in the beginning of the month, they have to pull back and may run out at the end. These spikes and dips in spend can trigger alerts across several metrics. This trend is even more apparent when looking at the campaign-level alerts. 
+
+Using the boxplots in Figure \ref{fig:chi_square_AS_results_graphs}, we can see that 50% of the time we trigger 1-3 alerts per campaign and 1-2 alerts per client (this is 1-3 for beginning of the month). The median number of alerts is higher per campaign than per client due to the higher volatility at the campaign-level. It's interesting to note that, for this method, we have more volatility during the middle of the month compared to the end of the month. Looking at the campaign alerts per client, we see a huge departure from what we saw in the earlier methods: we have no clients with triple digit campaign alert counts! For our clients with alerts, we tend to trigger more during the beginning and end of the month, but we still expect 1-2 alerts. At the campaign-level, we tend to get 1 more alert during the beginning of the month compared to the middle and end, but we still tend to stay at 3 or less alerts per campaign.
+
+Looking at the daily-level (Table \ref{tabs:chi_square_as_results_metis_comparison_overall}), we see mediocre `precision` and `accuracy`, along with very low `recall` and `F1-score`. We don't have any pattern of seasonality here, since this model is blind to it. When we take a look at model performance on the metric level, we see pretty dismal `recall` and `F1-score` across the board; we have a relatively large amount of false negatives---a byproduct of clamping down on model sensitivity. For the most part, `precision` and `accuracy` are good at the metric level, but it is evident that we can improve on this performance. 
+
+```{r chi_square_AS_results_graphs, fig.cap="\\label{fig:chi_square_AS_results_graphs}AS alert counts using Chi-Square Tukey Fence More Extreme Method", fig.width=9, fig.height=6, echo=FALSE}
+arrange_AS_alert_count_graphs(overall_results_count = chi_AS_counts, 
+                              metrics_count = chi_AS_metric_counts)
+```
+
+```{r chi_square_as_results_metis_comparison_overall, echo = FALSE}
+# perhaps it makes sense to display the confusion matrix here instead
+chi_AS_comparison <- AS_overall_confusion_matrix(chi_beginning_of_month_AS, 
+                                                 chi_middle_of_month_AS, 
+                                                 chi_end_of_month_AS, 
+                                                 logs)
+kable(chi_AS_comparison, digits = 2, format.args = list(big.mark = ","), 
+      caption = "\\label{tabs:chi_square_as_results_metis_comparison_overall}Prediction vs. Metis for AS alerts using Chi-Square Tukey Fence More Extreme Method")
+```
+
+```{r chi-square-as-results-metis-comparison-metric, echo = FALSE}
+# perhaps it makes sense to display the confusion matrix here instead
+chi_AS_metrics_comparision <- AS_metrics_confusion_matrix(chi_beginning_of_month_AS,
+                                                          chi_middle_of_month_AS,
+                                                          chi_end_of_month_AS, logs)
+kable(chi_AS_metrics_comparision %>%   
+        dplyr::filter(as.character(Metric) != "**Total**") %>% 
+        dplyr::arrange(as.character(Metric)), row.names = FALSE, digits = 2,
+      format.args = list(big.mark = ","))
+```
+
+##### TS Results
+We trigger more alerts beginning and end of month as expected with seasonal changes in site events both at the monthly and the weekly level. Most clients with alerts, have only 1 tag with an alert; although, the maximum alerts experienced can be quite high when there are issues on multiple tags. Once again, we see more alerts during the beginning and end of the month compared to the middle. Seasonality strongly influences site events and our model's naive assumption to not use seasonality fails to account for this. Using the boxplots in Figure \ref{fig:chi_square_TS_results_graphs}, we can observe that we have more variation on alert counts at the site type than at the event name. Event name tags don't have much varation; however, when we have a tablet tag alert, 50% of the time in the beginning of the month, we have between 1 and 4 alerts---quite different from when we looked at percent change methods. There is also much higher variation of the android tag alerts in the beginning of the month compared to the other time periods. 
+
+```{r chi_square_TS_results_graphs, fig.cap="\\label{fig:chi_square_TS_results_graphs}TS alert counts using Chi-Square Tukey Fence More Extreme Method", fig.width=9, fig.height=7, echo=FALSE}
+arrange_TS_alert_count_graphs(overall_results_count = chi_TS_counts, 
+                              metrics_count = chi_TS_metric_counts)
+```
+
+However, somewhat surprisingly, our false negatives are spread pretty evenly across the month (see Table \ref{tabs:chi_square_ts_results_metis_comparison_overall}). This suggests that the users want to see these alerts even though they are most likely due to seasonality. Performance across event name seems pretty similar. The users don't know which tag they are looking at, so we should expect this. Same as with event name, we don't see differences across site type aside from volume. 
+```{r chi_square_ts_results_metis_comparison_overall, echo = FALSE}
+# perhaps it makes sense to display the confusion matrix here instead
+chi_TS_comparison <- TS_overall_confusion_matrix(chi_beginning_of_month_TS, 
+                                                 chi_middle_of_month_TS, 
+                                                 chi_end_of_month_TS, logs)
+kable(chi_TS_comparison, digits = 2, format.args = list(big.mark = ","), 
+      caption = "\\label{tabs:chi_square_ts_results_metis_comparison_overall}Prediction vs. Metis for TS alerts using Chi-Square Tukey Fence More Extreme Method")
+```
+
+```{r chi-square-ts-results-metis-comparison-tag-event, echo = FALSE}
+# perhaps it makes sense to display the confusion matrix here instead
+chi_TS_metrics_comparision <- TS_metrics_confusion_matrix(chi_beginning_of_month_TS,
+                                                          chi_middle_of_month_TS,
+                                                          chi_end_of_month_TS, logs)
+kable(chi_TS_metrics_comparision$event_name %>%   
+        dplyr::filter(as.character(Metric) != "**TOTAL**") %>% 
+        dplyr::arrange(as.character(Metric)), row.names = FALSE, digits = 2, 
+      format.args = list(big.mark = ","))
+```
+
+```{r chi-square-ts-results-metis-comparison-tag-site-type, echo = FALSE}
+# perhaps it makes sense to display the confusion matrix here instead
+kable(chi_TS_metrics_comparision$site_type %>%   
+        dplyr::filter(as.character(Metric) != "**Total**") %>% 
+        dplyr::arrange(as.character(Metric)), row.names = FALSE, digits = 2, 
+      format.args = list(big.mark = ","))
+```
+
+##### Territory RexT Results
+Since the territory RexT levels are aggregations of clients, we can expect them to be more stable time-series. However, those monitoring this are likely to want "alerts" on variations that might not seem alert-worthy were they client-specific because the volume is greater here and there might be a multi-client or market-level issue starting. This makes the model's job much harder. It has to be more sensitive at this level, and this method's one-size fits all approach doesn't do us any favors. We don't wrongly classify any positives because these are large changes that users agreed with, unfortunately, we miss quite a few alerts (false negatives). We have essentially maximized our `precision` at the expense of `recall` and thus have a pretty dismal `F1-score`. It's obvious we need a model that adjusts its sensitivity to the metric and not just a significance level. It is also likely that our Tukey fence is too wide for this high-level of an aggregation.
+
+We don't have enough alerts triggered over the dates selected to really look for patterns in the data. We see that the only alerts flagged are the lowest-level (country) proving that the more aggregated we get, the less our model flags. This is even more evident when we look at which country was triggered: Chile; this is one of the smallest territories that we looked at. Looking at the boxplot in Figure \ref{fig:chi_square_RexT_results_graphs}, we see that most territories don't have alerts at any time (North America regions), and that when we do have variation, 75% of the alert counts are within 1 alert of each other with LATAM having the higher variation.
+
+When we compare the model's predictions to what users classified (results shown in Table \ref{tabs:chi_square_exec_results_metis_comparison_overall}), we see that while our `accuracy` and `precision` are good, we have awful `recall` and `F1-score`. Most of our false negatives were in the middle of the month. Since we don't take seasonality into account in this model, this could just be due to users deciding spikes/drops on the beginning/end of the month aren't alerts because of when it happened; as such, both the model and user would classify it as a negative. Again, we don't have any pattern at the territory level; our false negatives are spread across the data. 
+
+```{r chi_square_RexT_results_graphs, fig.cap="\\label{fig:chi_square_RexT_results_graphs}RexT alert counts using Chi-Square Tukey Fence More Extreme Method", fig.width=9, fig.height=6, echo=FALSE}
+arrange_RexT_alert_count_graphs(chi_exec_counts, chi_exec_territory_counts)
+```
+ 
+```{r chi_square_exec_results_metis_comparison_overall, echo = FALSE}
+# perhaps it makes sense to display the confusion matrix here instead
+chi_exec_comparison <- exec_overall_confusion_matrix(chi_results_exec, logs, 
+                                                     beginning_dates = exec_beginning_dates,
+                                                     middle_dates = exec_middle_dates,
+                                                     end_dates = exec_end_dates)
+kable(chi_exec_comparison, row.names = FALSE, digits = 2, 
+      caption = "\\label{tabs:chi_square_exec_results_metis_comparison_overall}Prediction vs. Metis for territory RexT alerts using Chi-Square Tukey Fence More Extreme Method")
+```
+
+```{r chi-square-exec-results-metis-comparison-by-territory, echo = FALSE}
+# perhaps it makes sense to display the confusion matrix here instead
+chi_exec_territory_comparison <- exec_territories_confusion_matrix(chi_results_exec, logs)
+kable(chi_exec_territory_comparison %>% 
+        dplyr::filter(as.character(Territory) != "**Total**"), row.names = FALSE, digits = 2)
+```
+
+#### ROC Curve
+Since this model yields a `TRUE`/`FALSE` answer to whether a given point is an anomaly, we don't have a threshold we can alter and will provide the ROC "points" instead (Figure \ref{fig:chi_square_roc_points}). Once again, it is easy to see that we accomplished our goal of becoming less sensitive. All of the points are very close to the y-axis meaning they had near-zero false positive rates. However, we can see that we aren't doing a great job of catching all the positives; our true positive rate is sub-50%. We can also observe that, in general, we are performing better than deciding randomly (i.e. flipping a coin for each series)---the dashed line. We have succeeded in lowering our false positive rate while increasing our true positive rate compared to the percent change models' ROC curves at similiar points, and all our points are further to the left (lower false positve rate) than the right-most points of the Twitter models (meaning this is less sensitive), however, we still need a much higher true positive rate to be optimal.
+
+```{r chi_square_roc_points, fig.cap="\\label{fig:chi_square_roc_points}ROC curve for Chi-square Tukey Fence More Extreme method", echo = FALSE, warning=FALSE}
+ROC_curve_points(AS_data = rbind(chi_AS_comparison, chi_AS_metrics_comparision %>%
+                                   rename(Date = Metric)), 
+                 TS_data = rbind(chi_TS_comparison, chi_TS_metrics_comparision$event_name %>%
+                                   rename(Date = Metric), 
+                                 chi_TS_metrics_comparision$site_type %>% 
+                                   rename(Date = Metric)), 
+                 exec_data = rbind(chi_exec_comparison, chi_exec_territory_comparison %>%
+                                     rename(Date = Territory)),
+                 method_name = 'Chi-Square, Tukey Fence, More Extreme Method')
+```
+
+#### Alogrithm Complexity
+This process can take quite long to calculate each alert and requires the use of the R package `data.table` to run in production in a reasonable amount of time. This will only get worse the more metrics we add. Average complexity ($\Theta$):
+
+\begin{equation}
+\centering
+  \Theta(n) = (k * n)^2
+\label{eq:chi_square_big_o}
+\end{equation}
+
+*where*:
+
+* *$n$ = number of series to inspect (i.e. total number of clients + total number of campaigns)*
+* *$k$ = number of KPIs to inspect (for each series)*
+
+This gives us an overall quadratic complexity ($\Theta(n^2)$) since $k$ should always be way less than $n$ as well as a tight best-case of $\Omega(n^2)$ and tight worst-case of $O(n^2)$. Note that this is method much slower than the mean/median methods. For large $n$, we would be much better off with a faster algorithm if one exists.
+
+#### Conclusions
+In switching from the Twitter model, we improved our `precision`, but lowered our `F1-score`'s; we were valuing the reduction in false positives more than that of false negatives, since we only had access to the number of false positives. As expected, the model had very high `specificity` for all tasks due to the high probability that a given series won't be an anomaly. This analysis was performed using a multiplier of 3 for the Tukey fence; however, if we lower it to 1.5, we practically double our alerts and improve our `F1-score` at the expense of `precision`. Since it's clear we are still missing something with this approach, we use 3 for the multiplier in production to just flag the most obvious outliers. This model also has very high `precision` across the board, and we are successfully alerting for large-deviation alerts. However, false negatives abound; in reducing sensitivity and increasing alert relevance, we inadvertently reduced the proportion of alerts we correctly identify---`recall` (Equation \ref{eq:recall}). Hence, the lower-deviation alerts are now going undetected. This can be seen in our ROC curve points: while our false positive rate is minimal, our true positive rate isn't too high, meaning we have room for improvement. Furthermore, we are missing a seasonality component, so we unnecessarily flag series whose cause can be traced to seasonality. Even though, some users still want to know this, ideally, we should take this into account in our model. In conclusion, since we maximized `precision` when selecting a less sensitive model, we obtained a very low `recall` and `F1-score` across the board---we are missing alerts, and we need to reincoporate seasonality somehow. 

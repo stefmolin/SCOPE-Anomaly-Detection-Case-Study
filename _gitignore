@@ -1,0 +1,14 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+*.Rproj*
+
+# don't commit package files (build should be handled separately with package_build.R)
+*.tar.gz
+
+# don't commit database login
+config.yml
+
+# jupyter checkpoints
+.ipynb_checkpoints/*

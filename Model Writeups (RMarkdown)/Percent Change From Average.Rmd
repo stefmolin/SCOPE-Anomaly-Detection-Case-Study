@@ -1,0 +1,443 @@
+---
+title: "Percent Change from Average"
+author: "Stefanie Molin"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output: html_document
+---
+
+```{r percent-change-from-average-setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# load the case study library
+library(modelAnalyzeR)
+library(dplyr)
+
+# all data will be loaded in the parent document and referenced within each of the child sections
+```
+
+### Mean vs. Percent Change
+When SCOPE was first created in April 2016 during a Hackathon, the model looked at the percent change of yesterday's value for CR, CTR, COS, and spend compared to the average of the 7 days prior. Each metric had its own alert threshold, and there were also different thresholds for top accounts versus other accounts, with top accounts having lower thresholds due to presumably less volatile performance. These thresholds ranged from 10 to 50 percent.  
+
+\begin{equation}
+\centering
+  \% \Delta = \frac{yesterday - mean(L7D)}{mean(L7D)}
+\label{eq:percent_change_mean_equation}
+\end{equation}
+
+We have since added metrics, however, to be consistent with the future models, we will evaluate all metrics here. Furthermore, in our original model, we selected a 7-day lookback window for calculating the average; in this case study, I will also look at 30- and 60-day lookback windows before moving forward with the analysis on the best one (determined by ROC curves). As you can imagine, this model was *very* sensitive; as such, I won't use the original values for the thresholds, but rather select a threshold at an acceptable false positive rate (arbitrarily chosen).
+
+#### Results
+Our first step is to find the optimal lookback window and threshold for AS, TS, and RexT separately. We can expect the series to have different behaviors, since we have some very granular series with AS, some very broad series with RexT, and very seasonal data with TS series. To do so, we will graph ROC curves for each series for the 3 lookback windows (L7D, L30D, L60D) and a range of thresholds. From these, we will take the lookback window that maximizes the area under the ROC curve. Once we have our lookback window, we will choose a maximum false positive rate which will yield the threshold to use for flagging the alerts. Note that the maximum false positive rate will be roughly $1 - specificity$ when we dive into the results (see Equation \ref{eq:specificity}).
+
+```{r percent-change-from-mean-data-prep, echo = FALSE, eval = FALSE}
+# calculate aggregations
+percent_change_from_mean_AS <- prep_AS_percent_change(AS_data, FUN = mean)
+percent_change_from_mean_TS <- prep_TS_percent_change(TS_data, FUN = mean)
+percent_change_from_mean_RexT <- prep_RexT_percent_change(RexT_data, FUN = mean)
+
+# remove L60D for RexT since it will be the L30D since the lookback is smaller
+percent_change_from_mean_RexT <- percent_change_from_mean_RexT %>% 
+  dplyr::filter(aggregation_level != 'L60D')
+
+# calculate ROC curves
+roc_percent_change_mean_AS <- ROC_curve(data = percent_change_from_mean_AS, 
+                                        logs = logs, 
+                                        curve_name_column = "aggregation_level", 
+                                        prediction_column = "percent_change", 
+                                        method_name = "Percent Change vs. Mean of Last X Days",
+                                        graph_title = "AS ROC Curve by Lookback")
+
+roc_percent_change_mean_TS <- ROC_curve(data = percent_change_from_mean_TS, 
+                                        logs = logs, 
+                                        curve_name_column = "aggregation_level", 
+                                        prediction_column = "percent_change", 
+                                        method_name = "Percent Change vs. Mean of Last X Days",
+                                        graph_title = "TS ROC Curve by Lookback")
+
+roc_percent_change_mean_RexT <- ROC_curve(data = percent_change_from_mean_RexT, 
+                                          logs = logs, 
+                                          curve_name_column = "aggregation_level", 
+                                          prediction_column = "percent_change", 
+                                          method_name = "Percent Change vs. Mean of Last X Days",
+                                          graph_title = "RexT ROC Curve by Lookback")
+
+# formatted ROC curves
+percent_change_from_mean_AS_roc_curve <- roc_percent_change_mean_AS$plot + lookback_window_color_scheme()
+percent_change_from_mean_TS_roc_curve <- roc_percent_change_mean_TS$plot + lookback_window_color_scheme()
+percent_change_from_mean_RexT_roc_curve <- roc_percent_change_mean_RexT$plot + lookback_window_color_scheme()
+
+# thresholds
+percent_change_from_mean_AS_aggregation_level <- 'L7D'
+percent_change_from_mean_AS_threshold <- roc_percent_change_mean_AS$roc %>% 
+  dplyr::filter(series == percent_change_from_mean_AS_aggregation_level & FPR <= .2) %>% 
+  head(1) %>% 
+  dplyr::select(alert_threshold)
+
+percent_change_from_mean_TS_aggregation_level <- 'L60D'
+percent_change_from_mean_TS_threshold <- roc_percent_change_mean_TS$roc %>% 
+  dplyr::filter(series == percent_change_from_mean_TS_aggregation_level & FPR <= .2) %>% 
+  head(1) %>% 
+  dplyr::select(alert_threshold)
+
+percent_change_from_mean_RexT_aggregation_level <- 'L30D'
+percent_change_from_mean_RexT_threshold <- roc_percent_change_mean_RexT$roc %>% 
+  dplyr::filter(series == percent_change_from_mean_RexT_aggregation_level & FPR <= .2) %>% 
+  head(1) %>% select(alert_threshold)
+
+# save all the data
+save(percent_change_from_mean_AS, roc_percent_change_mean_AS, 
+     percent_change_from_mean_TS, roc_percent_change_mean_TS, 
+     percent_change_from_mean_RexT, roc_percent_change_mean_RexT, 
+     percent_change_from_mean_AS_roc_curve, percent_change_from_mean_TS_roc_curve, 
+     percent_change_from_mean_RexT_roc_curve,
+     percent_change_from_mean_AS_aggregation_level, percent_change_from_mean_AS_threshold,
+     percent_change_from_mean_TS_aggregation_level, percent_change_from_mean_TS_threshold,
+     percent_change_from_mean_RexT_aggregation_level, percent_change_from_mean_RexT_threshold,
+     file = params$mean_percent_change_data_file)
+```
+
+```{r percent-change-from-mean-data-load, echo = FALSE}
+load(params$mean_percent_change_data_file)
+```
+
+##### AS Results
+```{r percent_change_from_mean_AS_lookback_roc, fig.cap="\\label{fig:percent_change_from_mean_AS_lookback_roc}ROC curve for AS alerts using percent change from the mean and different lookback windows", echo = FALSE}
+percent_change_from_mean_AS_roc_curve
+```
+
+When using the mean, last 60 days seems to be too much data for an average. This is most likely due to the propensity of an account to fluctuate quite a bit over time. It is closer between the 7- and 30-day lookbacks, however, the 7 day is a better choice. AS users tend to weigh more recent events higher, due to account changes, so 7-day lookbacks carry slightly more weight---the 7-day lookback has more area under the curve in Figure \ref{fig:percent_change_from_mean_AS_lookback_roc}. 
+
+It's interesting to note that at false positive rates above 80%, our performance converges to that of the method of randomly classifying (diagonal line). This means that at this point, since our threshold is so low (~8%), every positive we trigger at this threshold or lower has an equal likelihood of being a true positive or a false positive---not at all optimal. Using the ROC curve data, I have identified the threshold of `r percent_change_from_mean_AS_threshold %>% scopeR::format_percent(digits = 0)` by choosing a threshold with a false positive rate of 20%. This will be used to check if AS metrics are anomalies when compared to the average of the last 7 days prior. 
+
+```{r percent-change-from-mean-AS-flag-alerts, echo=FALSE, eval = FALSE}
+percent_change_from_mean_AS_results <- flag_percent_change_alerts(data = percent_change_from_mean_AS, 
+                                                                  aggregation = percent_change_from_mean_AS_aggregation_level, 
+                                                                  threshold = percent_change_from_mean_AS_threshold[1,1])
+
+# regenerate the client and campaign name columns
+percent_change_from_mean_AS_results <- percent_change_from_mean_AS_results %>% 
+  dplyr::mutate(client_name = str_split_fixed(as.character(series), ": ", 2)[,1], 
+                campaign_name = stringr::str_split_fixed(as.character(series), ": ", 2)[,2]) %>% 
+  dplyr::mutate(campaign_name = ifelse(campaign_name == "", "NOT A CAMPAIGN", campaign_name))
+
+# calculate number of clients triggered
+percent_change_from_mean_AS_percent_triggered <- percent_change_from_mean_AS_results %>% 
+  dplyr::filter(series == client_name) %>% 
+  dplyr::group_by(client_name, run_date) %>% 
+  dplyr::summarize(has_alerts = max(is_alert)) %>% 
+  dplyr::group_by(run_date) %>% 
+  dplyr::summarize(num_clients = n(), 
+                   num_alerts = sum(has_alerts), 
+                   percent_with_alerts = num_alerts/num_clients)
+
+# calculate tables
+percent_change_from_mean_AS_counts <- AS_alert_counts(percent_change_from_mean_AS_results %>% 
+                                                        dplyr::filter(run_date == AS_TS_beginning_date), 
+                                                      percent_change_from_mean_AS_results %>% 
+                                                        dplyr::filter(run_date == AS_TS_middle_date), 
+                                                      percent_change_from_mean_AS_results %>% 
+                                                        dplyr::filter(run_date == AS_TS_end_date))
+percent_change_from_mean_AS_metric_counts <- AS_alert_counts_by_metric(percent_change_from_mean_AS_results %>%
+                                                                         dplyr::filter(run_date == AS_TS_beginning_date), 
+                                                                       percent_change_from_mean_AS_results %>%
+                                                                         dplyr::filter(run_date == AS_TS_middle_date), 
+                                                                       percent_change_from_mean_AS_results %>%
+                                                                         dplyr::filter(run_date == AS_TS_end_date))
+
+# compare to Metis
+percent_change_from_mean_AS_comparison <- AS_overall_confusion_matrix(percent_change_from_mean_AS_results %>%
+                                                                        dplyr::filter(run_date == AS_TS_beginning_date),
+                                                                      percent_change_from_mean_AS_results %>%
+                                                                        dplyr::filter(run_date == AS_TS_middle_date), 
+                                                                      percent_change_from_mean_AS_results %>%
+                                                                        dplyr::filter(run_date == AS_TS_end_date), 
+                                                                      logs)
+
+percent_change_from_mean_AS_metrics_comparision <- AS_metrics_confusion_matrix(percent_change_from_mean_AS_results %>%
+                                                                                 dplyr::filter(run_date == AS_TS_beginning_date), 
+                                                                               percent_change_from_mean_AS_results %>%
+                                                                                 dplyr::filter(run_date == AS_TS_middle_date), 
+                                                                               percent_change_from_mean_AS_results %>%
+                                                                                 dplyr::filter(run_date == AS_TS_end_date), 
+                                                                               logs)
+
+# results graphs
+percent_change_mean_AS_graphs <- arrange_AS_alert_count_graphs(overall_results_count = percent_change_from_mean_AS_counts, 
+                                                               metrics_count = percent_change_from_mean_AS_metric_counts)
+
+# save results
+save(percent_change_from_mean_AS_results, percent_change_from_mean_AS_percent_triggered, 
+     percent_change_from_mean_AS_counts, percent_change_from_mean_AS_metric_counts, 
+     percent_change_from_mean_AS_comparison, percent_change_from_mean_AS_metrics_comparision,
+     percent_change_mean_AS_graphs, 
+     file = params$mean_percent_change_AS_results_file)
+```
+
+```{r load-percent-change-from-mean-AS-results, echo = FALSE}
+load(params$mean_percent_change_AS_results_file)
+```
+
+Now, we can start to gain an appreciation of just how sensitive percent change based methods are (see Figure \ref{fig:percent_change_from_mean_AS_results_graphs}).  For the beginning of the month, we triggered alerts for `r percent_change_from_mean_AS_percent_triggered %>% dplyr::filter(run_date == '2017-11-02') %>% select(percent_with_alerts) %>% scopeR::format_percent(digits = 0)` of the clients we looked at! (end = `r percent_change_from_mean_AS_percent_triggered %>% dplyr::filter(run_date == '2017-11-01') %>% select(percent_with_alerts) %>% scopeR::format_percent(digits = 0)`, middle = `r percent_change_from_mean_AS_percent_triggered %>% dplyr::filter(run_date == '2017-10-20') %>% select(percent_with_alerts) %>% scopeR::format_percent(digits = 0)`). Due to the nature of an anomalous event being rare, surely these cannot be so commonplace that we have half the clients with alerts on a daily basis. Not only are we triggering lots of client alerts, but campaign alerts as well. 
+
+```{r percent_change_from_mean_AS_results_graphs, fig.cap="\\label{fig:percent_change_from_mean_AS_results_graphs}AS alert counts using Percent Change from the Mean", fig.width=9, fig.height=7, echo=FALSE}
+percent_change_mean_AS_graphs
+```
+
+We trigger very few CTR and margin alerts compared to the other metrics we are investigating. This is probably due to the tendency of these metrics to be relatively steady on a day-to-day basis. We see the highest quantity of alerts on RexT metrics at the beginning of the month which is most likely due to spend increasing at the start of each month with new budget and the effect being more pronounced when the TAC doesn't adjust accordingly (inventory can cost more at the end of the month and will be freed up at the start of month, meaning more supply and lower TAC). This same pattern can be observed at the campaign level, but at a higher volume.
+
+Additionally, using the boxplots in Figure \ref{fig:percent_change_from_mean_AS_results_graphs}, we learn that this method triggers between 2 and 7 alerts for 50% of our clients with alerts and between 3 and 8 alerts for 50% of our campaigns with alerts. Notice how our minimum is always 1; this is because we are only looking at clients and campaigns, respectively, that have been flagged. Also, note that the maximum is always 12, because for AS alerts, we are looking at 12 KPI's. Furthermore, we see that when a client triggers an alert, the median number of KPI's that are flagged as client-level alerts is 4; this sounds kind of high, but since many of the metrics are correlated it's not surprising. This value is even higher for campaign metrics, meaning we tend to flag more campaign-level metrics than client-level metrics, which follows our intuition that campaign-level metrics are more volatile due to higher granularity. 
+
+It's also interesting to note that while nearly all of the clients we looked at have between 0 and 50 campaign alerts, there are quite a few with very large campaign alert counts: some have over 200, and this is just one day of data per date! This means that if the client had 20 campaigns, for example, *each* campaign had alerts for *at least* 11 out of the 12 KPI's checked. This is certainly an excessive volume of alerts.
+
+When we compare the results to the data collected with `Metis` (see Table \ref{tabs:percent_change_from_mean_AS_results_metis_comparison_overall}), we have pretty poor `precision` across the board due to our high percentage of false positives. Our `recall` is much better (although still mediocre), since it takes into account true positives (Equation \ref{eq:recall}), which we have lots of, because we are seemingly flagging everything, and false negatives, of which we hardly have any due to excessive flagging. Since the `F1-score` is a balance between the `precision` and `recall` (see Equation \ref{eq:F1_score}), it's pretty mediocre as well. Our `specificity` (true negative rate) is average, since we have a large amount of false positives due to over-sensitivity; notice how the `specificity` is roughly 1 minus the false positive rate threshold we chose to determine the cutoff threshold for alerts (see Equation \ref{eq:specificity}). Our `accuracy` is pretty poor here; since it is a very forgiving (and sometimes misleading) metric, because it takes into account all 4 possibilities (TP, FP, TN, FN --- equation in Equation \ref{eq:accuracy}), we want our `accuracy` to be in the 90's, at least.
+
+```{r percent_change_from_mean_AS_results_metis_comparison_overall, echo = FALSE}
+# perhaps it makes sense to display the confusion matrix here instead
+kable(percent_change_from_mean_AS_comparison, 
+      digits = 2, format.args = list(big.mark = ","), 
+      caption = "\\label{tabs:percent_change_from_mean_AS_results_metis_comparison_overall}Prediction vs. Metis for AS alerts using Percent Change from the Mean")
+```
+
+```{r percent-change-from-mean-AS-results-metis-comparison-metric, echo = FALSE}
+# perhaps it makes sense to display the confusion matrix here instead
+kable(percent_change_from_mean_AS_metrics_comparision %>% 
+        dplyr::filter(as.character(Metric) != "**Total**") %>% 
+        arrange(as.character(Metric)), 
+      row.names = FALSE, digits = 2, format.args = list(big.mark = ","))
+```
+
+We also see that we perform poorly across all metrics, but what is the most interesting are the metrics we perform the worst on using the `F1-score` (because `precision` and `recall` are only half the picture): margin and CTR. These metrics were the metrics we flagged the least! This means that not only are we over-sensitive across the board, but we aren't picking up on what is truly an alert. In using the percent change, we are not taking into account the context of the fluctuations over time just a predetermined threshold.
+
+##### TS Results
+For the TS ROC curve, we see the opposite trend as the AS curve. Here, last 60 days is actually the best performing and 7 days is the worst. We expect things like site events to be highly seasonal, so the more data we have, the better the mean describes it. TS users often looked for how far yesterday deviated from the central tendency of the site events graph. This is consistent with our findings here. The mean becomes a better descriptor of the data the more observations it has, because we smooth out the effects of seasonal fluctuations week over week.
+
+```{r percent_change_from_mean_TS_lookback_roc, fig.cap="\\label{fig:percent_change_from_mean_TS_lookback_roc}ROC curve for TS alerts using percent change from the mean and different lookback windows", echo = FALSE}
+percent_change_from_mean_TS_roc_curve
+```
+
+Using the ROC curve data in Figure \ref{fig:percent_change_from_mean_TS_lookback_roc}, I have identified the threshold of `r percent_change_from_mean_TS_threshold %>% scopeR::format_percent(digits = 0)` by choosing a threshold with a false positive rate of 20%. This will be used to check if TS metrics are anomalies when compared to the average of the last 60 days prior. Notice how this threshold is lower than the AS metrics threshold of `r percent_change_from_mean_AS_threshold %>% scopeR::format_percent(digits = 0)` at the same false positive rate; further evidence that the TS time series behave differently than their AS counterparts.
+
+```{r percent-change-from-mean-TS-flag-alerts, echo=FALSE, eval=FALSE}
+percent_change_from_mean_TS_results <- flag_percent_change_alerts(data = percent_change_from_mean_TS, 
+                                                                  aggregation = percent_change_from_mean_TS_aggregation_level, 
+                                                                  threshold = percent_change_from_mean_TS_threshold[1,1])
+
+# regenerate the event_name and site_type columns
+percent_change_from_mean_TS_results <- percent_change_from_mean_TS_results %>% 
+  dplyr::mutate(partner_name = ifelse(kpi == 'site_events', as.character(series), 
+                                      str_sub(as.character(series), start = stri_locate_first_regex(series, "[A-Z]+")[1], 
+                                              end = stri_locate_first_regex(series, "[A-Z]+")[,2])), 
+                event_name = str_sub(str_extract(as.character(series), "\\s[a-z]+"), 2),
+                site_type = str_sub(str_extract(as.character(series), "(?:\\son\\s)[a-z]+"), 5)) %>% 
+  dplyr::mutate(event_name = ifelse(is.na(event_name), "SITE LEVEL", event_name),
+                site_type = ifelse(is.na(site_type), "SITE LEVEL", site_type))
+
+# calculate number of clients triggered
+percent_change_from_mean_TS_percent_triggered <- percent_change_from_mean_TS_results %>% 
+  dplyr::filter(series == partner_name) %>% 
+  dplyr::group_by(partner_name, run_date) %>% 
+  dplyr::summarize(has_alerts = max(is_alert)) %>% 
+  dplyr::group_by(run_date) %>% 
+  dplyr::summarize(num_clients = n(), 
+                   num_alerts = sum(has_alerts), 
+                   percent_with_alerts = num_alerts/num_clients)
+
+# calculate tables
+percent_change_from_mean_TS_counts <- TS_alert_counts(percent_change_from_mean_TS_results %>% 
+                                                        dplyr::filter(run_date == AS_TS_beginning_date), 
+                                                      percent_change_from_mean_TS_results %>% 
+                                                        dplyr::filter(run_date == AS_TS_middle_date), 
+                                                      percent_change_from_mean_TS_results %>% 
+                                                        dplyr::filter(run_date == AS_TS_end_date))
+percent_change_from_mean_TS_metric_counts <- TS_alert_counts_by_metric(percent_change_from_mean_TS_results %>%
+                                                                         dplyr::filter(run_date == AS_TS_beginning_date), 
+                                                                       percent_change_from_mean_TS_results %>%
+                                                                         dplyr::filter(run_date == AS_TS_middle_date), 
+                                                                       percent_change_from_mean_TS_results %>%
+                                                                         dplyr::filter(run_date == AS_TS_end_date))
+
+# compare to Metis
+percent_change_from_mean_TS_comparison <- TS_overall_confusion_matrix(percent_change_from_mean_TS_results %>%
+                                                                        dplyr::filter(run_date == AS_TS_beginning_date),
+                                                                      percent_change_from_mean_TS_results %>%
+                                                                        dplyr::filter(run_date == AS_TS_middle_date), 
+                                                                      percent_change_from_mean_TS_results %>%
+                                                                        dplyr::filter(run_date == AS_TS_end_date), 
+                                                                      logs)
+percent_change_from_mean_TS_metrics_comparision <- TS_metrics_confusion_matrix(percent_change_from_mean_TS_results %>%
+                                                                                 dplyr::filter(run_date == AS_TS_beginning_date), 
+                                                                               percent_change_from_mean_TS_results %>%
+                                                                                 dplyr::filter(run_date == AS_TS_middle_date), 
+                                                                               percent_change_from_mean_TS_results %>%
+                                                                                 dplyr::filter(run_date == AS_TS_end_date), 
+                                                                               logs)
+
+# graphs
+percent_change_mean_TS_graphs <- arrange_TS_alert_count_graphs(overall_results_count = percent_change_from_mean_TS_counts, 
+                                                               metrics_count = percent_change_from_mean_TS_metric_counts)
+
+# save TS results
+save(percent_change_from_mean_TS_results, percent_change_from_mean_TS_percent_triggered, 
+     percent_change_from_mean_TS_counts, percent_change_from_mean_TS_metric_counts, 
+     percent_change_from_mean_TS_comparison, percent_change_from_mean_TS_metrics_comparision,
+     percent_change_mean_TS_graphs,
+     file = params$mean_percent_change_TS_results_file)
+```
+
+```{r load-percent-change-from-mean-TS-flagged-alerts, echo = FALSE}
+load(params$mean_percent_change_TS_results_file)
+```
+
+For the beginning of the month, we triggered alerts for `r percent_change_from_mean_TS_percent_triggered %>% dplyr::filter(run_date == '2017-11-02') %>% select(percent_with_alerts) %>% scopeR::format_percent(digits = 0)` of the clients we looked at. (end = `r percent_change_from_mean_TS_percent_triggered %>% dplyr::filter(run_date == '2017-11-01') %>% select(percent_with_alerts) %>% scopeR::format_percent(digits = 0)`, middle = `r percent_change_from_mean_TS_percent_triggered %>% dplyr::filter(run_date == '2017-10-20') %>% select(percent_with_alerts) %>% scopeR::format_percent(digits = 0)`). Much lower than the AS percentages; site events are expected to fluctuate within a certain range due to seasonality---they aren't as volatile as the AS metrics can be.
+
+Excluding the search tag since that is not super relevant for us, we have way fewer alerts on site level and homepage compared to the other tags. This is probably because those series have much larger volumes (many more people visit the homepage than the other pages), and site level is the aggregate of all the individual pages. We should expect these series to be less volatile, and therefore, have less alerts triggered. Conversely, the pages with the lower volumes, like sales, would be more volatile, and thus, trigger more alerts with this method. There doesn't seem to be any discrimination by site type (remember that not all clients use app tags and not everyone owns a tablet, so we have to take the raw counts with that in mind).
+
+```{r percent_change_from_mean_TS_results_graphs, fig.cap="\\label{fig:percent_change_from_mean_TS_results_graphs}TS alert counts using Percent Change from the Mean", fig.width=9, fig.height=7, echo=FALSE}
+percent_change_mean_TS_graphs
+```
+
+The boxplot in Figure \ref{fig:percent_change_from_mean_TS_results_graphs} reveals that we have higher variability in the number of homepage and basket tags with alerts compared to the other tags, although it is minimal. For event name tags, the median amount of alerts and, in fact, the whole boxplot in some cases, is just 1 alert; this means that when these tags break, they most likely break on a specific site type. Conversely, the site type tags have variation; for the most part, the median is 2 alerts. Therefore, if we have a desktop tag issue, we would expect it to affect 2 event names tags (homepage and sales, for example). This is quite interesting, because it means that (at least with this model) potential tag issues for a specific site type materialize themselves across more than one event name. We can also observe that, for the most part, partners have below 10 tag alerts at a given time and that the median is lower during the middle of the month. Note that alerts per partner can only ever be 1, because we are showing series that have alerts and the only partner-level alert possible is site-level. 
+
+As with the AS results, our metrics are poor across the board. We are flagging such a large number of cases that we hardly have any false negatives, but our false positives are quite high. `F1-score` is very low and accuracy is poor (see Table \ref{tabs:percent_change_from_mean_TS_results_metis_comparison_overall}). We can do much better than this. We are performing best on basket and site level, but make no mistake, this performance is mediocre at best. Same with site types, site-level is the best performing, but that is probably getting help from the aggregation of all the events to form it smoothing out the volatility.
+```{r percent_change_from_mean_TS_results_metis_comparison_overall, echo = FALSE}
+# perhaps it makes sense to display the confusion matrix here instead
+kable(percent_change_from_mean_TS_comparison, 
+      digits = 2, format.args = list(big.mark = ","), 
+      caption = "\\label{tabs:percent_change_from_mean_TS_results_metis_comparison_overall}Prediction vs. Metis for TS alerts using Percent Change from the Mean")
+```
+
+```{r percent-change-from-mean-TS-results-metis-comparison-tag-event, echo = FALSE}
+# perhaps it makes sense to display the confusion matrix here instead
+kable(percent_change_from_mean_TS_metrics_comparision$event_name %>% 
+        dplyr::filter(as.character(Metric) != "**TOTAL**") %>% 
+        dplyr::arrange(as.character(Metric)), 
+      row.names = FALSE, digits = 2, format.args = list(big.mark = ","))
+```
+
+```{r percent-change-from-mean-TS-results-metis-comparison-tag-site-type, echo = FALSE}
+# perhaps it makes sense to display the confusion matrix here instead
+kable(percent_change_from_mean_TS_metrics_comparision$site_type %>% 
+        dplyr::filter(as.character(Metric) != "**Total**") %>% 
+        dplyr::arrange(as.character(Metric)), 
+      row.names = FALSE, digits = 2, format.args = list(big.mark = ","))
+```
+
+##### Territory RexT Results
+
+```{r percent_change_from_mean_RexT_lookback_roc, fig.cap="\\label{fig:percent_change_from_mean_RexT_lookback_roc}ROC curve for RexT using percent change from the mean and different lookback windows", echo = FALSE}
+percent_change_from_mean_RexT_roc_curve
+```
+
+Here, we only have a choice between 7 days and 30 days, because the RexT alerts only look back 30 days. It is definitely a close call, but the 30 day window wins out. This data is highly aggregated, and therefore, not as volatile as the other time series we look at; hence, performance over a 30 day period is more indicative of overall patterns than just a week.
+
+Using the ROC curve data in Figure \ref{fig:percent_change_from_mean_RexT_lookback_roc}, I have identified the threshold of `r percent_change_from_mean_RexT_threshold %>% scopeR::format_percent(digits = 0)` by choosing a threshold with a false positive rate of 20%. This will be used to check if territory RexT has anomalies when compared to the average of the last 30 days prior. Notice how this threshold is lower than the AS metrics threshold of `r percent_change_from_mean_AS_threshold %>% scopeR::format_percent(digits = 0)` and the TS threshold of `r percent_change_from_mean_TS_threshold %>% scopeR::format_percent(digits = 0)` at the same false positive rate; further evidence that the territory RexT time series being so aggregated leads to a much lower threshold for anomalous behavior.
+
+```{r percent-change-from-mean-RexT-flag-alerts, echo=FALSE, eval=FALSE}
+percent_change_from_mean_RexT_results <- flag_percent_change_alerts(data = percent_change_from_mean_RexT, 
+                                                                    aggregation = percent_change_from_mean_RexT_aggregation_level, 
+                                                                    threshold = percent_change_from_mean_RexT_threshold[1,1])
+
+# add columns for looking at results
+region_lookup <- RexT_data %>% 
+  dplyr::distinct(country, subregion, region, ranking) %>% 
+  dplyr::mutate_all(as.character) %>% 
+  dplyr::mutate(series = ifelse(subregion == 'N/A', region, ifelse(country == 'N/A', subregion, country)))
+
+percent_change_from_mean_RexT_results <- percent_change_from_mean_RexT_results %>% 
+  dplyr::inner_join(region_lookup, by = "series")
+
+# calculate tables
+percent_change_from_mean_RexT_counts <- exec_alert_counts(percent_change_from_mean_RexT_results, 
+                                                          beginning_dates = exec_beginning_dates, 
+                                                          middle_dates = exec_middle_dates, 
+                                                          end_dates = exec_end_dates)
+percent_change_from_mean_RexT_territory_counts <- exec_alert_counts_by_territory(percent_change_from_mean_RexT_results, 
+                                                                                 beginning_dates = exec_beginning_dates,
+                                                                                 middle_dates = exec_middle_dates,
+                                                                                 end_dates = exec_end_dates)
+
+# compare to Metis
+percent_change_from_mean_RexT_comparison <- exec_overall_confusion_matrix(percent_change_from_mean_RexT_results, 
+                                                                          logs, 
+                                                                          beginning_dates = exec_beginning_dates,
+                                                                          middle_dates = exec_middle_dates, 
+                                                                          end_dates = exec_end_dates)
+percent_change_from_mean_RexT_territory_comparison <- exec_territories_confusion_matrix(percent_change_from_mean_RexT_results, 
+                                                                                        logs)
+
+# graphs
+percent_change_mean_RexT_graphs <- arrange_RexT_alert_count_graphs(percent_change_from_mean_RexT_counts, 
+                                                                   percent_change_from_mean_RexT_territory_counts)
+
+# save results
+save(percent_change_from_mean_RexT_results, percent_change_from_mean_RexT_results, 
+     percent_change_from_mean_RexT_counts, percent_change_from_mean_RexT_territory_counts, 
+     percent_change_from_mean_RexT_comparison, percent_change_from_mean_RexT_territory_comparison,
+     percent_change_mean_RexT_graphs,
+     file = params$mean_percent_change_RexT_results_file)
+```
+
+```{r load-percent-change-from-mean-RexT-flagged-alerts, echo=FALSE}
+load(params$mean_percent_change_RexT_results_file)
+```
+
+Percent change from the mean is most sensitive at the country-level and least sensitive at the region-level. This makes a lot of sense, because we would expect the more granular series to have more volatility just as individual stocks are more volatile than mutual funds. Here, we have a different pattern with time of month than the AS and TS series, we flag the most alerts in the beginning and middle of the month with the end having the least. This model flags Canada, the LATAM countries, and the subregion itself quite a bit; probably due to them being much smaller volume-wise, and thus, more prone to volatility. The boxplot in Figure \ref{fig:percent_change_from_mean_results_graphs} furthers this notion; we see much larger variablility in the alerts for the LATAM region and its component countries than for North America. Overall, the number of alerts are most variable in the middle of the month. 
+
+```{r percent_change_from_mean_results_graphs, fig.cap="\\label{fig:percent_change_from_mean_results_graphs}RexT alert counts using Percent Change from the Mean", fig.width=9, fig.height=6, echo=FALSE}
+percent_change_mean_RexT_graphs
+```
+
+For some reason, we perform significantly worse for the end of the month---perhaps some seasonality is at play; as shown in Table \ref{tabs:percent_change_from_mean_RexT_results_metis_comparison_overall}, we flagged very few during this period, but looks like the model wasn't catching things. Other than the poor performance for end-of-month, this model performs *much* better on this data compared to the AS and TS data sets. Though still not something we would want to use in practice, as the scores are still not great, we can see that the more aggregated the data gets, the better this method performs. Finally, some good news: this model performs perfectly for Brazil and pretty well on Mexico; the other territories are all over the place. Keep in mind that this isn't a huge sample size when we go down to the country granularity, so take this with a grain of salt. 
+```{r percent_change_from_mean_RexT_results_metis_comparison_overall, echo = FALSE}
+# perhaps it makes sense to display the confusion matrix here instead
+kable(percent_change_from_mean_RexT_comparison, 
+      row.names = FALSE, digits = 2, format.args = list(big.mark = ","), 
+      caption = "\\label{tabs:percent_change_from_mean_RexT_results_metis_comparison_overall}Prediction vs. Metis for territory RexT alerts using Percent Change from the Mean")
+```
+
+```{r percent-change-from-mean-RexT-results-metis-comparison-by-territory, echo = FALSE}
+# perhaps it makes sense to display the confusion matrix here instead
+kable(percent_change_from_mean_RexT_territory_comparison %>% 
+        dplyr::filter(as.character(Territory) != "**Total**"), 
+      row.names = FALSE, digits = 2, format.args = list(big.mark = ","))
+```
+
+#### ROC Curve
+With the ROC curve of AS, TS, and RexT results at their optimal lookback windows (Figure \ref{fig:percent_change_from_mean_roc_curve}), we see that this method always performs worse for the AS compared to TS and RexT. This method performs best on aggregated data like that of the territory RexT. At our chosen false positive rate (20%), we can see the true positive rates for each product (intersections with purple line). While we definitely are performing better than randomly triggering alerts (dashed line), we have work to do to get our ROC curve closer to optimal. 
+
+```{r percent_change_from_mean_roc_curve, fig.cap="\\label{fig:percent_change_from_mean_roc_curve}ROC curve for percent change from mean at optimal lookback windows", echo = FALSE, warning=FALSE}
+ROC_curve(data = rbind(percent_change_from_mean_AS %>% 
+                         dplyr::filter(aggregation_level == percent_change_from_mean_AS_aggregation_level) %>%
+                         dplyr::mutate(product = "AS"),
+                       percent_change_from_mean_TS %>% 
+                         dplyr::filter(aggregation_level == percent_change_from_mean_TS_aggregation_level) %>% mutate(product = "TS"),
+                       percent_change_from_mean_RexT %>% 
+                         dplyr::filter(aggregation_level == percent_change_from_mean_RexT_aggregation_level) %>% mutate(product = "RexT")), 
+          logs = logs, 
+          curve_name_column = "product", 
+          prediction_column = "percent_change", 
+          method_name = "Percent Change vs. Mean with Chosen FPR Threshold Annotated",
+          graph_title = "ROC Curve by Product")$plot +
+  ggplot2::geom_vline(xintercept = 0.2, colour = "purple")
+```
+
+#### Alogrithm Complexity  
+This method is implemented as a vectorized operation, so it will run faster time-wise than the complexity dictates; however, for the complexity analysis we have to check each combination against the threshold which is equivalent to running it through a loop. Average complexity ($\Theta$):
+
+\begin{equation}
+\centering
+  \Theta(n) = k * n
+\label{eq:percent_change_mean_big_o}
+\end{equation}
+
+*where*:
+
+* *$n$ = number of series to inspect (i.e. total number of clients + total number of campaigns)*
+* *$k$ = number of KPIs to inspect (for each series)*
+
+This gives us an overall linear complexity ($\Theta(n)$), since $k$ should always be way less than $n$, as well as, a tight best-case of $\Omega(n)$ and tight worst-case of $O(n)$. For large $n$, we would be better off with a faster algorithm if one exists.
+
+#### Conclusions
+As expected, the model had `specificity` of roughly 80% due to our chosen false positive rate. Across AS, TS, and territory RexT, this model performed poorly on `precision`, `recall`, and `F1-score`; our accuracy and ROC curves could definitely be improved. We are successfully flagging a lot of alerts, but our false positives are pretty high. We have very few false negatives, but not because our model is great at capturing expected performance, but rather because we flag so many things as positive that the conditional probability of flagging negative and having it be wrong is low. Furthermore, there is the problem of setting thresholds: if we set common thresholds this won't work for everyone; and, if we have users set it, `SCOPE` has to store those, and the users have to be responsible to update them---not likely to be done judging from past experience. While this method performs decently on the territory RexT data, since it is highly aggregated, it is not fit for granular data or seasonal data like we see with the AS and TS metrics.
+
+Note that, even though this method has proved very sensitive, when `SCOPE` used this in production, our thresholds were even lower than what we selected here! This means that we were even more trigger-happy and our false negative rate was higher. This is very dangerous, because users become desensitized to the alerts when more often than not they are false positives. We have had this issue with `SCOPE`, and once we implemented the current model, while we miss more smaller issues now, users have commented that they now have to make sure they read the alerts instead of directing them to a folder to ignore. It is clear that this method is not optimal, as it doesn't seem to understand the underlying data. 
