@@ -1,0 +1,40 @@
+---
+title: "Random Forest"
+author: "Stefanie Molin"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output: html_document
+---
+
+### Random Forest
+Random forest is a bagging method (**b**ootstrap-**agg**regat**ing**); this means we build many weak estimators (decision trees in the case of a random forest) by randomly sampling *with* replacement (hence, the bootstrap part of the name).  Once we have all the trees built, we average them (the aggregating part of the name). This method can turn a weak estimator into a strong(er) one. For this model, the best performing set of features was: the last 25 data points min-max scaled and dummy-encoded KPI's.
+
+*Note that this method will be performed in Python using Scikit-learn and the Jupyter notebook is available in the repo.*
+
+#### Results
+Overall, we achieve a `F1-score` of 0.79 for AS, 0.91 for TS, and 0.96 for RexT; however, when we separate this out by class (alert vs. not-alert), we see that our performance is being carried by the majority class (not alert). Isolating the alert class, our `F1-score` for AS is 0.47, 0.37 for TS, and 0.83 for RexT. Figure \ref{fig:rf_conf_mat} shows the confusion matrix on the test set using thresholds of 40% for AS, 35% for TS, and 10% for RexT. These might sound like low thresholds, but this is something we can use to our advantage: we would have lots of leeway in fine-tuning which alerts we send and in the emails and which should be in the dashboard only (alerts that aren't as serious).
+
+\begin{figure}[h!]
+\centering
+  \includegraphics[width=1.0\textwidth]{images/rf_conf_matrix.png}
+\caption{Random Forest confusion matrix}
+\label{fig:rf_conf_mat}
+\end{figure}
+
+
+#### ROC Curve
+In Figure \ref{fig:rf_roc_curve}, we see the ROC curve for the TS alerts increasingly rapidly; however, since this dataset has the fewest alerts (about 8%), we still aren't optimal. This method would not work as-is for AS, but once again this model is fine for the aggregated RexT data.
+
+\begin{figure}[h!]
+\centering
+  \includegraphics[width=1.0\textwidth]{images/rf_roc_curve.png}
+\caption{Random Forest ROC curve}
+\label{fig:rf_roc_curve}
+\end{figure}
+
+
+#### Alogrithm Complexity  
+See `Scikit-learn` documentation.
+
+#### Conclusions
+This performed pretty well on the RexT data, but that is most likely due to the relatively few data points we have. The performance is pretty weak for AS and TS data (despite the promising ROC curve); perhaps with more data to average the opinions for those series, we can obtain better results, however, for now, we should look to other methods.
+

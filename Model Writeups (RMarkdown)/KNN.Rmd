@@ -1,0 +1,39 @@
+---
+title: "KNN"
+author: "Stefanie Molin"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output: html_document
+---
+
+### K-Nearest Neighbors (KNN)
+As its name implies, k-nearest neighbors finds the k most similar observations to each point (using distance--like Euclidean or Manhattan) and classifies each point based on what its neighbors are classified as. Since this method uses distance, you *must* make sure to scale your data. For this model, the best performing set of features was: the last 25 data points min-max scaled and dummy-encoded KPI's.
+
+*Note that this method will be performed in Python using Scikit-learn and the Jupyter notebook is available in the repo.*
+
+#### Results
+Overall, we achieve a `F1-score` of 0.79 for AS, 0.90 for TS, and 0.84 for RexT; however, when we separate this out by class (alert vs. not-alert), we see that our performance is being carried by the majority class (not alert). Isolating the alert class, our `F1-score` for AS is 0.44, 0.26 for TS (!), and 0.25 for RexT (!). Figure \ref{fig:knn_conf_mat} shows the confusion matrix on the test set using thresholds of 35% for AS, 60% for TS, and 40% for RexT.
+
+\begin{figure}[h!]
+\centering
+  \includegraphics[width=1.0\textwidth]{images/knn_conf_matrix.png}
+\caption{KNN confusion matrix}
+\label{fig:knn_conf_mat}
+\end{figure}
+
+
+#### ROC Curve
+As seen in Figure \ref{fig:knn_roc_curve}, this method was one of the best for the TS dataset even though we see that it could definitely be a lot better. The ROC curve is slower to rise than ideal and even around 20% FPR we are just getting close to 80% TPR. Unfortunately, this means that if we want a good true positive to false positive ratio, we have to allow lots of false negatives which doesn't work for our use case. This is one of the worst methods for the AS and RexT data, altough given that the RexT data is relatively sparse, we will take that with a grain of salt. 
+
+\begin{figure}[h!]
+\centering
+  \includegraphics[width=1.0\textwidth]{images/knn_roc_curve.png}
+\caption{KNN ROC curve}
+\label{fig:knn_roc_curve}
+\end{figure}
+
+
+#### Alogrithm Complexity  
+See `Scikit-learn` documentation.
+
+#### Conclusions
+There may be some hope for developing this further for the TS alerts, but there isn't much promise for the other datasets.

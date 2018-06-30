@@ -2,7 +2,7 @@
 title: "SCOPE Model Case Study"
 subtitle: "An analysis of past, present, and potential future models."
 author: "Stefanie Molin"
-date: "`r format(Sys.Date(), '%B %d, %Y')`"
+date: "June 8, 2018"
 params:
   kpi_data_file: "data/kpi_data.Rdata"
   sample_data_file: "data/sample_data.Rdata"
@@ -409,7 +409,7 @@ It is important to note that we aren't merely trying to build an anomaly detecti
 *Note that some models will disqualify certain time series (not enough days, no TAC last 2 days, etc.), however, it is still possible to classify those in `Metis`; therefore, for the purposes of evaluating the models and penalizing them for having limitations that a human would not, those will be placed as "no alert" for the model and compared to user opinions. If the user also classified as "no alert", the model correctly disqualified the account (by ignoring it, it can't trigger an alert). Conversely, if the user classified it as an alert, then the model will be penalized with a false negative because it wrongly disqualified the account. The idea is to have a model that doesn't have many (if any) of these restrictions and can match up well with user opinions.*
 
 ## Prior Models
-`SCOPE` has had 2 models prior to the model in production at the time of writing this paper (`r todays_date`): percent change from the average of prior days and Twitter's `AnomalyDetection` R package. Here, we will analyze those along with relevant variations. Note that for all these models we have to exclude some of the time series to make sure we have enough data for the tests. Users may still have flagged these as alerts, so will we flag them as not alerts to count everything, thereby penalizing these models for not being able to detect those types of alerts. AS and TS series need to have data for the day before the run date (the day to test) and have data for 25 of the last 30 days; additionally, for the AS data, we need to have TAC greater than 0 for the last 2 days.
+`SCOPE` has had 2 models prior to the model in production at the time of writing this paper (June 8, 2018): percent change from the average of prior days and Twitter's `AnomalyDetection` R package. Here, we will analyze those along with relevant variations. Note that for all these models we have to exclude some of the time series to make sure we have enough data for the tests. Users may still have flagged these as alerts, so will we flag them as not alerts to count everything, thereby penalizing these models for not being able to detect those types of alerts. AS and TS series need to have data for the day before the run date (the day to test) and have data for 25 of the last 30 days; additionally, for the AS data, we need to have TAC greater than 0 for the last 2 days.
 
 ```{r prior-model-1, child = 'Percent Change From Average.Rmd'}
 ```
@@ -421,7 +421,7 @@ It is important to note that we aren't merely trying to build an anomaly detecti
 ```
 
 ## Current Model and Other Rules-based Models
-Now that we understand the motivation to reduce sensitivity, we are going to dive into the current model being used from May 16, 2017 - `r todays_date` along with any other rules-based models that are found while researching this paper. Although the purpose of this case study is to look through models we have used and then find a machine learning alternative, I wanted to have a section for other rules-based models that we have not used, yet could be interesting for this study and to help establish the baseline performance we are looking to beat with the machine learning alternatives. 
+Now that we understand the motivation to reduce sensitivity, we are going to dive into the current model being used from May 16, 2017 - June 8, 2018 (the time of finalizing this case study and my last day here so I can't speak to the future usage) along with any other rules-based models that are found while researching this paper. Although the purpose of this case study is to look through models we have used and then find a machine learning alternative, I wanted to have a section for other rules-based models that we have not used, yet could be interesting for this study and to help establish the baseline performance we are looking to beat with the machine learning alternatives. 
 
 ```{r current-model, child = 'Chi-Square Tukey Fence More Extreme.Rmd'}
 ```
@@ -430,17 +430,38 @@ Now that we understand the motivation to reduce sensitivity, we are going to div
 ```
 
 ## Unsupervised Machine Learning Models
-Unsupervised models are useful when we don't have any information on whether our model output is correct (i.e. we don't have labelled data); in this case, we would not know what was an alert and what wasn't---we just have the time series data. The models presented here won't use the labelled data to inform their predictions, however, since we have that data, we can use it to evaluate them for comparision to the supervised learning models presented in the next section. We can expect supervised machine learning models to perform better than unsupervised ones, nonetheless, to be thorough, I will go through some potential unsupervised algorithms for comparison. Here, we have to make sure our training data is both representative of the data set as a whole and separate from the test set (unseen by the model during training) used to grade the models on. 
+Unsupervised models are useful when we don't have any information on whether our model output is correct (i.e. we don't have labelled data); in this case, we would not know what was an alert and what wasn't---we just have the time series data. These models won't use the labelled data to inform their predictions, however, since we have that data, we can use it to evaluate them for comparision to the supervised learning models presented in the next section. We can expect supervised machine learning models to perform better than unsupervised ones, nonetheless, to be thorough, I went through some potential unsupervised algorithms for comparison. Here, we have to make sure our training data is both representative of the data set as a whole and separate from the test set (unseen by the model during training) used to grade the models on.
 
-### TBD
+I tried the Isolation Forest, Local Outlier Factor, and One-class SVM algorithms on the data. All performed pretty poorly--worse than the current model--so in the interest of brevity (read trying to complete this before my last day), I won't include them here. If you are interested in how these performed, you can take a look at the Jupyter notebook with the name of the method. There is also some dimensionality reduction with PCA (principal component analysis) for those who are interested.
 
 ## Supervised Machine Learning Models
 Since we have the labelled data from `Metis`, we can use supervised machine learning models. With supervised learning, the model can use labelled data to make better judgements; we are no longer guessing as we were with the unsupervised methods discussed previously. These models should perform better than their unsupervised counterparts due to the additional information. As with unsupervised learning, we need our test and train data sets to avoid overfitting of the model which leads to poor ability of the model to generalize to new (unseen) cases.
 
+I tried the following algorithms: Ada Boost Classifier, Decision Tree, Extra Trees Classifer, Gradient Boosted Decision Trees, K Nearest Neighbors, Logistic Regression, Multi-layer Perceptron (Neural Network), Naive Bayes, Passive Aggressive Classifier, Random Forest, Ridge Classifier, Stochastic Gradient Descent Classifier, and Support Vector Machine. After an initial trial with each method, I determined if further investigation was worth it; I will only document here the methods that passed that test and show promise for further investigation. Feel free to check out the Jupyter notebooks for the other methods.
+
+*Note that since we will always be separating our data into a training and a testing set, the stats reported here-on-out will only be on the testing set meaning that the number of series tested will be significantly less than in the rules sections.*
+
 ```{r logistic-regression, child = 'Logistic Regression.Rmd'}
 ```
 
-### TBD
+```{r knn, child = 'KNN.Rmd'}
+```
+
+```{r rf, child = 'Random Forest.Rmd'}
+```
+
+```{r gbdt, child = 'GBDT.Rmd'}
+```
+
+```{r mlp, child = 'MLP.Rmd'}
+```
 
 # Conclusion
-**TBD** Final thoughts/overall learnings/which new model selected and why 
+The selection of a machine learning model has proven to be a tough task, partly because of the difference of user opinions and not having collected enough opinions on the same series. Since I am not able to definitively name a better model at this point, I leave the reader with possible avenues of continued research and pointers on what to look for when judging future models. Gradient Boosted Decision Trees (GBDT) showed a lot of promise and often performs well in these situations of imbalanced classes. Although the neural network also showed promise, GBDT has the benefit of being more easily interpreted; with neural networks you are getting a black box which isn't always the best solution (i.e. if you need to explain the inner workings to others). For further investigation, I suggest:
+
+1. Collect more data from `Metis` and re-test results of top methods. 
+2. Try adding a feature of sliding window for the mean (you can try overlapping windows and non-overlapping ones).
+3. Try combining logistic regression with GBDT and separately with Random Forest. *[See this article for reference](http://scikit-learn.org/stable/auto_examples/ensemble/plot_feature_transformation.html#sphx-glr-auto-examples-ensemble-plot-feature-transformation-py)*.
+4. Additional feature engineering.
+
+When evaluating your models, make sure your true positives are more than your false positives by a good amount. I was using a ratio of 2:1, but this is more subjective; false positives are very costly with the emails, so I was targeting 1 out of every 3 at most being a false positive. Another thing I was looking for was a high true positive rate with a low false positive rate; this is because we also need to control our false negatives--it's not very helpful if we have a good true positive to false positive ratio, but numerous false negatives because those are alerts we are failing to catch(!).

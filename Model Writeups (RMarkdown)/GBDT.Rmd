@@ -1,0 +1,39 @@
+---
+title: "GBDT"
+author: "Stefanie Molin"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output: html_document
+---
+
+### Gradient Boosted Decision Trees (GBDT)
+This method, like the random forest, takes many weak estimators and makes a stronger one. However, boosting and bagging carry out this process differently. Gradient boosting iterates on the estimators where bagging will keep making new ones. The gradient boosting decision tree algorithm trains a decision tree on the data and then checks what it classified wrong; with this data, it weighs those incorrectly classified observations higher and then trains again. This process repeats with the idea that the resulting model gets stronger and stronger (but you have to avoid overfitting). For this model, the best performing set of features was: the last 25 data points min-max scaled using linear weights and dummy-encoded KPI's.
+
+*Note that this method will be performed in Python using Scikit-learn and the Jupyter notebook is available in the repo.*
+
+#### Results
+Overall, we achieve a `F1-score` of 0.80 for AS, 0.91 for TS, and 0.96 for RexT; however, when we separate this out by class (alert vs. not-alert), we see that our performance is being carried by the majority class (not alert). Isolating the alert class, our `F1-score` for AS is 0.46, 0.39, and 0.82 for RexT. Figure \ref{fig:gbdt_conf_mat} shows the confusion matrix on the test set using thresholds of 50% for AS, 50% for TS, and 0.1% for RexT.
+
+\begin{figure}[h!]
+\centering
+  \includegraphics[width=1.0\textwidth]{images/gbdt_conf_matrix.png}
+\caption{GBDT confusion matrix}
+\label{fig:gbdt_conf_mat}
+\end{figure}
+
+
+#### ROC Curve
+As seen in Figure \ref{fig:gbdt_roc_curve}, this method was one of the best for our datasets even though we see that it could definitely be a lot better. ROC curves are, unfortunately, still rather low in our target FPR range (0-10%). 
+
+\begin{figure}[h!]
+\centering
+  \includegraphics[width=1.0\textwidth]{images/gbdt_roc_curve.png}
+\caption{GBDT ROC curve}
+\label{fig:gbdt_roc_curve}
+\end{figure}
+
+
+#### Alogrithm Complexity  
+See `Scikit-learn` documentation.
+
+#### Conclusions
+This method is very commonly the top-performer in a variety of use-cases because it "learns" from its mistakes in classification. The only issue here is that our data is quite noisy. This method should be revisited when we have enough data so that most time series have been classified a few times over and the classification opinions averaged.

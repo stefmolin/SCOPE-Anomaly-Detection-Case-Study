@@ -15,10 +15,10 @@ library(dplyr)
 # all data will be loaded in the parent document and referenced within each of the child sections
 ```
 
-### Logisitic Regression
-How it works in detail. Parameters experimented with and what they do.
+### Logistic Regression
+Logistic regression despite its name is a method of classification. It allows us to predict which class an observation belongs to (think: alert or not alert). We can also use it to predict the probability it is an alert by defining a threshold above which it is an alert. For this model, the best performing set of features was: the last 25 data points, dummy-encoded KPI's, exponential weights for TS, linear weights for AS, and including summary statistics (mean, variance, min, max). Everything was min-max scaled ($value = \frac{value - min(x)}{max(x) - min(x)}$).
 
-*Note that this method will be performed in Python using Scikit-learn.*
+*Note that this method will be performed in Python using Scikit-learn and the Jupyter notebook is available in the repo.*
 
 ```{r format_data_to_pass_to_python, echo=FALSE, eval=FALSE}
 python_AS_data <- prep_AS_for_python(AS_data, days = 25)
@@ -32,17 +32,30 @@ write.csv(x = python_RexT_data, file = params$python_RexT_file, row.names = FALS
 ```
 
 #### Results
-Evaluate best performance (tuned parameters) against the criteria defined in the main document for each of the time periods.
+Overall, we achieve a `F1-score` of 0.74 for AS, 0.89 for TS, and 0.96 for RexT; however, when we separate this out by class (alert vs. not-alert), we see that our performance is being carried by the majority class (not alert). Isolating the alert class, our `F1-score` for AS is 0.21 (!), 0.18 for TS (!), and 0.83 for RexT. Figure \ref{fig:log_reg_conf_mat} shows the confusion matrix on the test set using thresholds of 80% for AS, 70% for TS, and 50% for RexT.
 
-**TO DO** Tables go here
-One per AS/TS/Exec
+\begin{figure}[h!]
+\centering
+  \includegraphics[width=1.0\textwidth]{images/logistic_regression_conf_matrix.png}
+\caption{Logistic regression confusion matrix}
+\label{fig:log_reg_conf_mat}
+\end{figure}
+
 
 #### ROC Curve
-Graph all points on the graph as lines per AS/TS/Exec and as an overall line
+Note that although we have a dip in the ROC curve for TS (see Figure \ref{fig:log_reg_roc_curve}), it is in the range of false positive rate greater than 20% which is already way more than we can tolerate. Essentially, we only care about maximizing the area under the ROC curve from 0% FPR to 20% FPR.
+
+\begin{figure}[h!]
+\centering
+  \includegraphics[width=1.0\textwidth]{images/logistic_regression_roc.png}
+\caption{Logistic regression ROC curve}
+\label{fig:log_reg_roc_curve}
+\end{figure}
+
 
 #### Alogrithm Complexity  
-
+See `Scikit-learn` documentation.
 
 #### Conclusions
-Observations noticed on the results. Strengths/Weaknesses of the model. Any patterns?
+This performed pretty well on the RexT data, but that is most likely due to the relatively few data points we have. The performance is pretty weak for AS and TS data; perhaps with more data to average the opinions of for those series, we can obtain better results, but for now, we should look to other methods.
 
